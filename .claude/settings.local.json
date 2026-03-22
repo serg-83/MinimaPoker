@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.minima.global)",
+      "Read(//storage/self/primary/Download/termux/**)",
+      "Bash(2)",
+      "Bash(echo:*)",
+      "Bash(npx stylelint:*)",
+      "Bash(wc -l /storage/self/primary/Download/termux/MinimaPoker/app/js/*.js)",
+      "Bash(find /storage/self/primary/Download/termux/MinimaPoker -maxdepth 3 -type f \\\\\\( -name \".github\" -o -name \".gitlab*\" -o -name \".travis*\" -o -name \"*.yml\" -o -name \"*.yaml\" -o -name \"*.md\" -o -name \"README*\" -o -name \"CLAUDE*\" \\\\\\) 2>/dev/null | head -20)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(find /storage/emulated/0/Download/termux/minima-project -type f -name \"*coins*\" 2>/dev/null | head -20)"
+    ]
+  }
+}

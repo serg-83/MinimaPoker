@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Minima Poker - Table</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="app/js/mds.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <link rel="stylesheet" href="app/css/style.css">
+    <link rel="stylesheet" href="app/css/table-fix.css">
+    <script src="app/js/decimal.js"></script>
+    <script src="app/js/utils.js"></script>
+    <script src="app/js/modal.js"></script>
+    <script src="app/js/wallet.js"></script>
+    <script src="app/js/crypto.js"></script>
+    <script src="app/js/sql.js"></script>
+    <script src="app/js/maxima.js"></script>
+    <script src="app/js/channel.js"></script>
+    <script src="app/js/poker.js"></script>
+    <script src="app/js/tooltips.js"></script>
+    <script src="app/js/table.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Minima Poker</h1>
+        <div id="game">
+            <div class="poker-table">
+                <div class="community-cards" id="community"></div>
+                <div class="pot" id="pot">Pot: 0</div>
+                <div id="seats"></div>
+                <div class="controls" id="controls">
+                    <button type="button" class="action-btn fold"  id="foldBtn"  disabled>Fold</button>
+                    <button type="button" class="action-btn call"  id="callBtn"  disabled>Call</button>
+                    <button type="button" class="action-btn raise" id="raiseBtn" disabled>Raise</button>
+                    <button type="button" class="action-btn check" id="checkBtn" disabled>Check</button>
+                </div>
+                <div id="phase-controls"></div>
+                <div id="status"></div>
+            </div>
+        </div>
+        <button type="button" id="backToLobby" class="back-button" onclick="goBackToLobby()">&#8592;</button>
+    </div>
+
+    <script>
+        var tableId = (function() {
+            var pairs = window.location.search.substring(1).split('&');
+            for (var i = 0; i < pairs.length; i++) {
+                var p = pairs[i].split('=');
+                if (decodeURIComponent(p[0]) === 'tableId') return decodeURIComponent(p[1] || '');
+            }
+            return null;
+        })();
+
+        function goBackToLobby() {
+            var uid = typeof MDS !== 'undefined' ? MDS.minidappuid : null;
+            window.location.href = 'index.html' + (uid ? '?uid=' + encodeURIComponent(uid) : '');
+        }
+
+        MDS.init(function(msg) {
+            if (msg.event === 'inited') {
+                initWallet(function(user) {
+                    if (user) {
+                        window.myMaximaName       = user.maximaName;
+                        window.myMaximaKey        = user.maximaPublicKey;
+                        window.myMinimaAddress    = user.minimaAddress;
+                        window.myMinimaPublicKey  = user.minimaPublicKey;
+                    }
+                    sql.createTables(function() {
+                        tableUI.init(tableId);
+                    });
+                });
+            } else if (msg.event === 'MDSCOMMS') {
+                if (msg.data && msg.data.public === false) {
+                    try {
+                        var m = JSON.parse(msg.data.message);
+                        if (m.type && tableUI.handleServiceMessage) tableUI.handleServiceMessage(m);
+                    } catch (e) {}
+                }
+            }
+        });
+    </script>
+</body>
+</html>
