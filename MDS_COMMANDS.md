@@ -5,7 +5,6 @@
 | Command | File | Description |
 |---|---|---|
 | `balance` | wallet.js, index.html | Get token balances |
-| `newaddress` | wallet.js | Generate a new Minima address |
 | `maxima;getaddress` | wallet.js | Get own Maxima pubkey + name |
 | `maxima action:info` | index.html | Get own Maxima contact address (MxAddr@host:port) |
 | `maxima action:send publickey:... application:MinimaPoker data:...` | maxima.js | Send P2P message via Maxima |
