@@ -135,16 +135,6 @@ function checkTxn(txnHex, callback) {
 }
 
 /**
- * Import a token (if needed)
- * @param {string} tokenData - token data hex
- * @param {Function} callback
- */
-function importToken(tokenData, callback) {
-    MDS.cmd("tokens action:import data:" + tokenData, function(res) {
-        callback(res);
-    });
-}
-
 /**
  * Create a simple payment transaction (helper)
  * @param {string} to - destination address
@@ -172,7 +162,6 @@ if (typeof window !== 'undefined') {
         signTxn: signTxn,
         postTxn: postTxn,
         checkTxn: checkTxn,
-        importToken: importToken,
         createPaymentTxn: createPaymentTxn
     };
 }
@@ -185,7 +174,6 @@ if (typeof wallet === 'undefined') {
         signTxn: signTxn,
         postTxn: postTxn,
         checkTxn: checkTxn,
-        importToken: importToken,
         createPaymentTxn: createPaymentTxn
     };
 }

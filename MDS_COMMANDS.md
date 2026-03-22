@@ -14,7 +14,6 @@
 | `sign publickey:... data:...` | wallet.js | Sign data with a key |
 | `hash data:0x...` | crypto.js | SHA3 hash (used in commit-reveal) |
 | `send address:... amount:... tokenid:... automation:` | wallet.js | Send tokens from wallet |
-| `tokens action:import data:...` | wallet.js | Import a custom token |
 
 ## MDS.cmd() — Channel Transactions (channel.js)
 Chained with `;` in a single MDS.cmd() call.
