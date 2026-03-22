@@ -6,19 +6,16 @@
 |---|---|---|
 | `balance` | wallet.js, index.html | Get token balances |
 | `newaddress` | wallet.js | Generate a new Minima address |
-| `maxima action:info` | wallet.js, index.html | Get own Maxima pubkey + name + contact address |
+| `maxima;getaddress` | wallet.js | Get own Maxima pubkey + name |
+| `maxima action:info` | index.html | Get own Maxima contact address (MxAddr@host:port) |
 | `maxima action:send publickey:... application:MinimaPoker data:...` | maxima.js | Send P2P message via Maxima |
 | `maxcontacts action:list` | index.html, lobby.js, service.js | List contacts |
 | `maxcontacts action:add contact:...` | index.html | Add a contact |
-| `maxcontacts action:remove id:...` | index.html | Remove a contact by id |
-
-## MDS.cmd() — Signing / Crypto
-
-| Command | File | Description |
-|---|---|---|
+| `maxcontacts action:remove id:...` | index.html | Remove a contact |
 | `sign publickey:... data:...` | wallet.js | Sign data with a key |
 | `hash data:0x...` | crypto.js | SHA3 hash (used in commit-reveal) |
-| `send address:... amount:... tokenid:...` | wallet.js | Send tokens (direct wallet transfer) |
+| `send address:... amount:... tokenid:... automation:` | wallet.js | Send tokens from wallet |
+| `tokens action:import data:...` | wallet.js | Import a custom token |
 
 ## MDS.cmd() — Channel Transactions (channel.js)
 Chained with `;` in a single MDS.cmd() call.
@@ -26,18 +23,18 @@ Chained with `;` in a single MDS.cmd() call.
 | Command | Description |
 |---|---|
 | `txncreate id:...` | Create a transaction in memory |
-| `txninput id:... amount:... address:... floating:true` | Add floating input (no specific coinid required) |
+| `txninput id:... amount:... address:... floating:true` | Add floating input |
 | `txnoutput id:... amount:... address:... storestate:true` | Add output |
 | `txnstate id:... port:... value:...` | Set state variable (100=settlement flag, 101=sequence, 200=channel hashId) |
-| `txnaddamount id:... tokenid:... amount:... onlychange:true` | Add funds from wallet (auto-selects coins; onlychange:true = only add change output) |
+| `txnaddamount id:... tokenid:... amount:... onlychange:true` | Add funds from wallet (auto-selects coins) |
 | `txnsign id:... publickey:...` | Sign transaction with a key |
 | `txnimport id:... data:...` | Import a hex-encoded transaction |
 | `txnexport id:...` | Export transaction to hex |
-| `txnscript id:... auto:true` | Attach scripts to all inputs (required before posting floating inputs) |
-| `txnmmr id:...` | Attach MMR proofs to all inputs (required before posting) |
+| `txncheck id:...` | Validate transaction before posting |
+| `txnscript id:... auto:true` | Attach scripts to inputs (required before posting floating inputs) |
+| `txnmmr id:...` | Attach MMR proofs to inputs (required before posting) |
 | `txnpost id:... auto:true` | Post transaction to the network |
 | `txndelete id:...` | Delete transaction from memory |
-| `txncheck id:...` | Validate transaction before posting (checks `validtransaction`) |
 
 ## MDS.cmd() — Scripts / Blockchain
 
@@ -63,76 +60,58 @@ Chained with `;` in a single MDS.cmd() call.
 ## Maxima Message Structure
 
 ```javascript
-// Incoming MAXIMA event in MDS.init callback:
+// Incoming MAXIMA event:
 msg = { event: 'MAXIMA', data: maxjson }
-// maxjson fields:
 msg.data.from        // "0x..." sender pubkey
 msg.data.application // "MinimaPoker"
 msg.data.data        // "0x..." hex-encoded JSON payload
 
-// Payload encoding (UTF-8 safe):
+// Encoding (UTF-8 safe):
 // Send:    '0x' + encodeURIComponent(JSON.stringify(obj)) → hex
 // Receive: decodeURIComponent(hexToBytes(strip0x(msg.data.data)))
 ```
 
 ## postTxn Pattern (channel.js)
 
-Correct order for posting a transaction with floating inputs:
-
 ```javascript
 'txnimport id:X data:HEX;' +
 'txnscript id:X auto:true;' +   // attach scripts
 'txnmmr id:X;' +                 // attach MMR proofs
-'txnpost id:X auto:true;' +      // post (res[3])
+'txnpost id:X auto:true;' +      // post — result is res[3]
 'txndelete id:X'
-// res[3].status = true/false
 ```
 
 ## Fund Flow
 
 ```
 Player wallet
-    │
-    │  txnaddamount (auto-selects coins from wallet)
+    │  txnaddamount
     ▼
-fundingAddress  ← N-of-N multisig script
-    │               address: runscript → address
-    │               tracked: newscript trackall:true
-    │
-    │  trigger tx (output → eltooAddress, sequence=0)
+fundingAddress  ← N-of-N multisig (runscript + newscript trackall:true)
+    │  trigger tx
     ▼
-eltooAddress    ← eltoo script (timeout = 30 blocks)
-    │               address: runscript → address
-    │               tracked: newscript trackall:true
-    │
-    │  update txs (sequence increments each game state update)
-    │  settlement tx (after timeout, splits funds to players)
+eltooAddress    ← eltoo script, timeout=30 blocks (runscript + newscript trackall:true)
+    │  update txs / settlement tx
     ▼
-participants[i].address  ← each player's Minima address (newaddress)
+participants[i].address  ← each player's address (newaddress)
 ```
 
 ## Dispute Timeline
 
 | Event | Blocks | Time (~50s/block) |
 |---|---|---|
-| Trigger tx posted on-chain | 0 | t=0 |
+| Trigger tx posted | 0 | t=0 |
 | Latest update tx posted | MIN_UPDATE_COINAGE = 5 | ~4 min |
 | Settlement tx posted, funds distributed | MIN_SETTLE_COINAGE = 30 | ~25 min |
-| Channel timeout (claimSettlement) | timeoutBlocks = 30 | ~25 min |
 
 ## Channel Scripts (KISSVM)
 
 ### fundingAddress — N-of-N multisig
-
 ```
 LET randid=[<channelId>] ASSERT MULTISIG(N pubkey1 pubkey2 ...) RETURN TRUE
 ```
 
-- Spendable only if **all N players** have signed (N = 2–4)
-- Spent by: trigger tx (open) or cooperative close tx
-
 ### eltooAddress — eltoo update/settlement script
-
 ```
 LET randid=[<channelId>]
 LET settlement=STATE(100)
@@ -152,10 +131,6 @@ ENDIF
 | `STATE(101)` | integer | Sequence number of this tx |
 | `PREVSTATE(101)` | integer | Sequence of the coin being spent |
 | `STATE(200)` | channelId | Written to settlement outputs for payout lookup |
-
-**Update tx** (`STATE(100)=FALSE`): passes if new sequence > previous sequence.
-
-**Settlement tx** (`STATE(100)=TRUE`): passes if sequence == previous sequence AND `@COINAGE >= timeoutBlocks`.
 
 ## Database Schema
 
