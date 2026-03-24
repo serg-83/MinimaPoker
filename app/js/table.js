@@ -653,10 +653,11 @@ var tableUI = {
             myBet = parseInt(bets[this.players[this.myPlayerIndex].playerPubKey] || 0);
         }
         var needToCall = currentBet > myBet;
-        $('#foldBtn').prop('disabled', !isMyTurn);
-        $('#callBtn').prop('disabled', !(isMyTurn && needToCall));
-        $('#raiseBtn').prop('disabled', !isMyTurn);
-        $('#checkBtn').prop('disabled', !(isMyTurn && !needToCall));
+        this._actionPending = false;
+        $('#foldBtn').prop('disabled', !isMyTurn).css('opacity', isMyTurn ? '1' : '');
+        $('#callBtn').prop('disabled', !(isMyTurn && needToCall)).css('opacity', (isMyTurn && needToCall) ? '1' : '');
+        $('#raiseBtn').prop('disabled', !isMyTurn).css('opacity', isMyTurn ? '1' : '');
+        $('#checkBtn').prop('disabled', !(isMyTurn && !needToCall)).css('opacity', (isMyTurn && !needToCall) ? '1' : '');
     },
 
     setupEventListeners: function() {
@@ -671,13 +672,25 @@ var tableUI = {
     },
 
     sendAction: function(action, amount) {
-        if (!this.tableId) return;
+        if (!this.tableId || this._actionPending) return;
+        this._actionPending = true;
+        this._disableActionButtons();
         var self = this;
         var msg = { type: 'BET', tableId: this.tableId, player: window.myMaximaKey, action: action, amount: amount || '0' };
         MDS.comms.solo(JSON.stringify(msg));
         this._sendToAllPlayers(msg, function(ok) {
-            if (!ok) pokerModal.alert('Failed to send action', 'error');
+            if (!ok) {
+                pokerModal.alert('Failed to send action', 'error');
+                self._actionPending = false;
+            }
+            // Buttons re-enabled by renderControls when game state updates
         });
+        // Safety timeout — re-enable after 10s if no state update
+        setTimeout(function() { self._actionPending = false; }, 10000);
+    },
+
+    _disableActionButtons: function() {
+        $('#foldBtn, #callBtn, #raiseBtn, #checkBtn').prop('disabled', true).css('opacity', '0.5');
     },
 
     sendCommit: function() {
