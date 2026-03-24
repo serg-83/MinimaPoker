@@ -344,17 +344,22 @@ var messageHandlers = {
             if (totalAmount.equals(0)) { log('REQUEST_ACCEPTED: totalAmount is 0, aborting'); return; }
             channel.createFundingTxn(chan.fundingAddress, myAmount, totalAmount.toString(), chan.tokenId, function(err, fundingHex) {
                 if (err) { log('createFundingTxn failed: ' + err); return; }
-                chan.fundingTx = fundingHex;
-                signTxnAsync(chan.triggerTx, getMyWalletKey(), function(err, signedTrigger) {
-                    if (err) { log(err); return; }
-                    signTxnAsync(chan.settlementTx, getMyWalletKey(), function(err, signedSettle) {
+                // Add scripts+MMR for our own inputs before sending to Player B
+                var mmrId = 'mmr_' + randomString();
+                MDS.cmd('txnimport id:' + mmrId + ' data:' + fundingHex + ';txnscript id:' + mmrId + ' auto:true;txnmmr id:' + mmrId + ';txnexport id:' + mmrId + ';txndelete id:' + mmrId, function(mmrResp) {
+                    var fundingWithMMR = (mmrResp && Array.isArray(mmrResp) && mmrResp[3] && mmrResp[3].response && mmrResp[3].response.data) ? mmrResp[3].response.data : fundingHex;
+                    chan.fundingTx = fundingWithMMR;
+                    signTxnAsync(chan.triggerTx, getMyWalletKey(), function(err, signedTrigger) {
                         if (err) { log(err); return; }
-                        log('REQUEST_ACCEPTED: sending CREATE_CHANNEL fundingLen=' + fundingHex.length);
-                        maxima.sendRaw(fromPubKey, {
-                            type: 'CREATE_CHANNEL', channelId: chan.id,
-                            fundingTx: chan.fundingTx, triggerTx: signedTrigger, settlementTx: signedSettle
-                        }, function() {});
-                        sql.updateChannelAfterFunding(chan.id, null, 'FUNDING', null, function() {});
+                        signTxnAsync(chan.settlementTx, getMyWalletKey(), function(err, signedSettle) {
+                            if (err) { log(err); return; }
+                            log('REQUEST_ACCEPTED: sending CREATE_CHANNEL fundingLen=' + fundingWithMMR.length);
+                            maxima.sendRaw(fromPubKey, {
+                                type: 'CREATE_CHANNEL', channelId: chan.id,
+                                fundingTx: fundingWithMMR, triggerTx: signedTrigger, settlementTx: signedSettle
+                            }, function() {});
+                            sql.updateChannelAfterFunding(chan.id, null, 'FUNDING', null, function() {});
+                        });
                     });
                 });
             });
@@ -425,9 +430,14 @@ var messageHandlers = {
             log('FINISH_START_CHANNEL: signing funding tx');
             signTxnAsync(message.fundingTx, 'auto', function(err, signed) {
                 if (err) { log('FINISH_START_CHANNEL sign failed: ' + err); return; }
-                log('FINISH_START_CHANNEL: posting funding tx');
-                postTxnAsync(signed, function(err, postRes) {
-                    if (err) { log('FINISH_START_CHANNEL: post failed: ' + err); return; }
+                log('FINISH_START_CHANNEL: posting funding tx (auto:false, MMR already set by both parties)');
+                var txid = 'post_' + randomString();
+                MDS.cmd('txnimport id:' + txid + ' data:' + signed + ';txnpost id:' + txid + ' auto:false;txndelete id:' + txid, function(res) {
+                    var postRes = Array.isArray(res) ? res[1] : null;
+                    if (!postRes || !postRes.status) {
+                        log('FINISH_START_CHANNEL: post failed: ' + JSON.stringify(postRes));
+                        return;
+                    }
                     log('FINISH_START_CHANNEL post result: ' + JSON.stringify(postRes));
                     chan.status = 'OPEN';
                     sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
