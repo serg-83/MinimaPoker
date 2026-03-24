@@ -87,6 +87,7 @@
             <div class="lobby-buttons">
                 <button type="button" class="lobby-btn" id="createTable">🃏 &nbsp;Create Table</button>
                 <button type="button" class="lobby-btn" id="activeTablesBtn">🎰 &nbsp;Active Tables</button>
+                <button type="button" class="lobby-btn" id="channelHistoryBtn">📋 &nbsp;Channel History</button>
                 <button type="button" class="lobby-btn" id="addContactBtn">➕ &nbsp;Add Contact</button>
                 <button type="button" class="lobby-btn" id="manageContactsBtn">👥 &nbsp;Manage Contacts</button>
             </div>
@@ -379,7 +380,61 @@
 
             $('#manageContactsBtn').button().click(function() { toggleSidebar('contacts'); });
             $('#activeTablesBtn').button().click(function() { toggleSidebar('tables'); });
+
+            $('#channelHistoryBtn').button().click(function() { showChannelHistory(); });
         });
+
+        function showChannelHistory() {
+            sql.getAllChannels(function(channels) {
+                if (!channels || channels.length === 0) {
+                    pokerModal.alert('No channels found.', 'info');
+                    return;
+                }
+                var html = '<div style="max-height:60vh;overflow-y:auto;font-size:0.85rem">';
+                html += '<table style="width:100%;border-collapse:collapse">';
+                html += '<tr style="border-bottom:1px solid #444"><th style="text-align:left;padding:4px">Status</th><th style="text-align:left;padding:4px">Balances</th><th style="text-align:left;padding:4px">Seq</th><th style="padding:4px"></th></tr>';
+                for (var i = 0; i < channels.length; i++) {
+                    var ch = channels[i];
+                    var s = ch.status || 'UNKNOWN';
+                    var color = s === 'OPEN' ? '#4caf50' : (s === 'FUNDING' ? '#ff9800' : (s === 'CLOSED' ? '#888' : (s === 'DISPUTE' ? '#f44336' : '#aaa')));
+                    var balStr = '';
+                    if (ch.balances) {
+                        var b = typeof ch.balances === 'string' ? JSON.parse(ch.balances) : ch.balances;
+                        var parts = [];
+                        for (var k in b) { if (b.hasOwnProperty(k)) parts.push(k.slice(0,8) + '…:' + b[k]); }
+                        balStr = parts.join(', ');
+                    }
+                    var seq = ch.sequence || 0;
+                    var actionBtn = '';
+                    if (s === 'OPEN' || s === 'FUNDING' || s === 'DISPUTE') {
+                        actionBtn = '<button class="ch-action-btn" data-id="' + ch.id + '" data-status="' + s + '" data-tableid="' + (ch.tableId || '') + '" style="font-size:0.75rem;padding:2px 8px">Manage</button>';
+                    } else if (s === 'CLOSED') {
+                        actionBtn = '<button class="ch-delete-btn" data-id="' + ch.id + '" style="font-size:0.75rem;padding:2px 8px;opacity:0.6">Delete</button>';
+                    }
+                    html += '<tr style="border-bottom:1px solid #333"><td style="padding:4px"><span style="color:' + color + '">' + s + '</span></td><td style="padding:4px">' + (balStr || '—') + '</td><td style="padding:4px">' + seq + '</td><td style="padding:4px">' + actionBtn + '</td></tr>';
+                }
+                html += '</table></div>';
+
+                pokerModal.custom('Channel History', html, function(container) {
+                    $(container).on('click', '.ch-action-btn', function() {
+                        var id = $(this).data('id');
+                        var status = $(this).data('status');
+                        var tableId = $(this).data('tableid');
+                        pokerModal.close();
+                        if (tableId) {
+                            window.location.href = 'table.html?tableId=' + tableId;
+                        } else {
+                            pokerModal.alert('No table associated. Channel ID: ' + id, 'info');
+                        }
+                    });
+                    $(container).on('click', '.ch-delete-btn', function() {
+                        var id = $(this).data('id');
+                        var row = $(this).closest('tr');
+                        sql.deleteChannel(id, function() { row.remove(); });
+                    });
+                });
+            });
+        }
     </script>
 </body>
 </html>

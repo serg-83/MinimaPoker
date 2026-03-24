@@ -131,6 +131,14 @@ var SQL = {
         });
     },
 
+    getAllChannels: function(callback) {
+        var self = this;
+        MDS.sql("SELECT * FROM channels ORDER BY rowid DESC", function(res) {
+            var rows = (res && res.status && res.rows) ? res.rows : [];
+            callback(rows.map(function(r) { return self._parseChannelRow(r); }));
+        });
+    },
+
     deleteChannel: function(channelId, callback) {
         var id = this._esc(channelId);
         MDS.sql("DELETE FROM channels WHERE id=" + id, function(res) {

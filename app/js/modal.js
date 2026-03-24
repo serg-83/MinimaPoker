@@ -169,3 +169,23 @@ pokerModal.choice = function(title, message, options, callback) {
     document.getElementById('pm-cancel').onclick = function() { close(null); };
     this._overlay.onclick = function(e) { if (e.target === self._overlay) close(null); };
 };
+
+pokerModal.custom = function(title, html, onReady) {
+    if (typeof document === 'undefined') return;
+    this._ensureOverlay();
+    this._overlay.innerHTML =
+        '<div class="poker-modal" style="max-width:600px;width:90vw">' +
+            '<div class="poker-modal-title">' + title + '</div>' +
+            '<div class="poker-modal-message">' + html + '</div>' +
+            '<div class="poker-modal-buttons"><button class="poker-modal-btn secondary" id="pm-close-custom">Close</button></div>' +
+        '</div>';
+    this._overlay.classList.add('active');
+    var self = this;
+    document.getElementById('pm-close-custom').onclick = function() { self._overlay.classList.remove('active'); };
+    this._overlay.onclick = function(e) { if (e.target === self._overlay) self._overlay.classList.remove('active'); };
+    if (onReady) onReady(self._overlay.querySelector('.poker-modal-message'));
+};
+
+pokerModal.close = function() {
+    if (this._overlay) this._overlay.classList.remove('active');
+};
