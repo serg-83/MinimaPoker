@@ -425,18 +425,14 @@ var messageHandlers = {
             log('FINISH_START_CHANNEL: signing funding tx');
             signTxnAsync(message.fundingTx, 'auto', function(err, signed) {
                 if (err) { log('FINISH_START_CHANNEL sign failed: ' + err); return; }
-                log('FINISH_START_CHANNEL: preparing (adding local scripts+MMR)');
-                prepareTxnAsync(signed, function(err, prepared) {
-                    if (err) { log('FINISH_START_CHANNEL prepare failed: ' + err); return; }
-                    log('FINISH_START_CHANNEL: posting funding tx');
-                    postTxnAsync(prepared, function(err, postRes) {
-                        if (err) { log('FINISH_START_CHANNEL: post failed: ' + err); return; }
-                        log('FINISH_START_CHANNEL post result: ' + JSON.stringify(postRes));
-                        chan.status = 'OPEN';
-                        sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
-                            maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {});
-                            debouncedRefreshTable(chan.tableId);
-                        });
+                log('FINISH_START_CHANNEL: posting funding tx');
+                postTxnAsync(signed, function(err, postRes) {
+                    if (err) { log('FINISH_START_CHANNEL: post failed: ' + err); return; }
+                    log('FINISH_START_CHANNEL post result: ' + JSON.stringify(postRes));
+                    chan.status = 'OPEN';
+                    sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
+                        maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {});
+                        debouncedRefreshTable(chan.tableId);
                     });
                 });
             });
