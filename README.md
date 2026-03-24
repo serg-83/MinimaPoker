@@ -76,7 +76,7 @@ Player A                              Player B
 | P2P Messaging | Maxima |
 | Payment Channels | eltoo (update + trigger + settlement scripts) |
 | Frontend | Vanilla JS (ES5, Rhino-compatible) |
-| Storage | Minima SQLite (MDS) |
+| Storage | H2 (via MDS) |
 | Runtime | MiniDApp (MiniHub) |
 
 ---
