@@ -74,10 +74,13 @@ var tableUI = {
 
             // Generate commit secret and auto-send
             if (state.round === 'commit') {
-                // Reset on new commit phase
+                // Only reset secret if our reveal was already accepted (appears in state.reveals)
+                var ourRevealAccepted = state.reveals && window.myMaximaKey && state.reveals[window.myMaximaKey];
                 if (!oldState || oldState.round !== 'commit') {
-                    self.mySecret = null;
-                    self.myCommitHash = null;
+                    if (ourRevealAccepted || !self.mySecret) {
+                        self.mySecret = null;
+                        self.myCommitHash = null;
+                    }
                     self._revealSent = false;
                 }
                 if (!self.mySecret && self.myPlayerIndex !== -1) {
@@ -97,7 +100,7 @@ var tableUI = {
                 self._revealSent = true;
                 self.sendReveal();
             }
-            if (state.round !== 'reveal') { self._revealSent = false; }
+            if (state.round !== 'reveal' && state.round !== 'commit') { self._revealSent = false; }
 
             // Show winner and auto-start next hand
             if (state.round === 'finished' && (!oldState || oldState.round !== 'finished') && !self._nextHandScheduled) {
@@ -106,8 +109,6 @@ var tableUI = {
                 if (self._isEnforcer()) {
                     setTimeout(function() {
                         self._nextHandScheduled = false;
-                        self.mySecret = null;
-                        self.myCommitHash = null;
                         self._autoStartGame();
                     }, 4000);
                 }
