@@ -121,11 +121,20 @@ var SQL = {
         var self = this;
         var id = this._esc(tableId);
         MDS.sql("DELETE FROM tables WHERE tableId=" + id, function() {
-            MDS.sql("DELETE FROM players WHERE tableId=" + id, function(res) {
-                self._invalidateCache('tables');
-                self._invalidateCache(tableId);
-                if (callback) callback(res);
+            MDS.sql("DELETE FROM players WHERE tableId=" + id, function() {
+                MDS.sql("DELETE FROM channels WHERE tableId=" + id, function(res) {
+                    self._invalidateCache('tables');
+                    self._invalidateCache(tableId);
+                    if (callback) callback(res);
+                });
             });
+        });
+    },
+
+    deleteChannel: function(channelId, callback) {
+        var id = this._esc(channelId);
+        MDS.sql("DELETE FROM channels WHERE id=" + id, function(res) {
+            if (callback) callback(res);
         });
     },
 

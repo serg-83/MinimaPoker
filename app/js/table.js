@@ -224,10 +224,20 @@ var tableUI = {
         var html;
         if (this.channelInfo) {
             var s = this.channelInfo.status || 'FUNDING';
-            var color = s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : (s === 'CLOSED' ? 'gray' : 'red'));
+            var color = s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : (s === 'CLOSED' ? 'gray' : (s === 'DISPUTE' ? 'red' : 'red')));
             html = '<strong>Channel:</strong> <span style="color:' + color + ';">' + s + '</span>';
             if (s === 'OPEN') {
                 html += ' <button id="closeChannelBtn2" class="primary" style="font-size:0.75rem;padding:3px 10px">Close Channel</button>';
+            } else if (s === 'FUNDING') {
+                html += ' <button id="cancelChannelBtn" class="secondary" style="font-size:0.75rem;padding:3px 10px">Cancel &amp; Reclaim</button>';
+            } else if (s === 'DISPUTE') {
+                var startBlock = parseInt((this.channelInfo.disputeStartBlock || this.channelInfo.disputestartblock) || 0);
+                var timeout = parseInt((this.channelInfo.timeout) || 30);
+                if (startBlock > 0) {
+                    html += ' <span id="disputeCountdown" style="font-size:0.75rem;color:#aaa;">checking blocks...</span>';
+                    html += ' <button id="claimSettleBtn" class="primary" style="font-size:0.75rem;padding:3px 10px;display:none">Claim Funds</button>';
+                    this._updateDisputeCountdown(startBlock, timeout);
+                }
             }
         } else {
             html = '<button id="createChannelBtn" class="primary">Create Channel</button>';
@@ -237,6 +247,67 @@ var tableUI = {
         el.innerHTML = html;
         $('#createChannelBtn').click(function() { tableUI.createChannel(); });
         $('#closeChannelBtn2').click(function() { tableUI.showCloseChannelDialog(); });
+        $('#cancelChannelBtn').click(function() { tableUI.cancelFundingChannel(); });
+        $('#claimSettleBtn').click(function() { tableUI.claimSettlementNow(); });
+    },
+
+    _updateDisputeCountdown: function(startBlock, timeout) {
+        var self = this;
+        MDS.cmd('block', function(resp) {
+            if (!resp || !resp.response || !resp.response.block) return;
+            var current = parseInt(resp.response.block);
+            var remaining = timeout - (current - startBlock);
+            var el = document.getElementById('disputeCountdown');
+            var btn = document.getElementById('claimSettleBtn');
+            if (!el) return;
+            if (remaining <= 0) {
+                el.textContent = 'Ready to claim!';
+                el.style.color = 'green';
+                if (btn) btn.style.display = '';
+            } else {
+                el.textContent = remaining + ' blocks remaining (~' + remaining + ' min)';
+                if (btn) btn.style.display = 'none';
+            }
+        });
+    },
+
+    cancelFundingChannel: function() {
+        var self = this;
+        sql.getChannelByTable(this.tableId, function(row) {
+            if (!row) return;
+            // If funding tx was never posted (no coinId), just delete from DB
+            var coinId = row.coinId || row.coinid;
+            if (!coinId) {
+                sql.deleteChannel(row.id || row.ID, function() {
+                    self.channelInfo = null;
+                    self.renderChannelStatus();
+                    pokerModal.alert('Channel cancelled. No funds were locked.', 'success');
+                });
+                return;
+            }
+            // Funding tx was posted — need dispute to reclaim
+            pokerModal.confirm('Funding transaction was already posted. Start on-chain dispute to reclaim funds?', function(ok) {
+                if (!ok) return;
+                var chan = channel.fromRow(row);
+                if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
+                chan.startDispute(function(err) {
+                    if (err) { pokerModal.alert('Dispute failed: ' + err, 'error'); return; }
+                    self._clearTimers();
+                    self.loadChannelInfo();
+                    self._startDisputePoller(chan);
+                });
+            });
+        });
+    },
+
+    claimSettlementNow: function() {
+        var self = this;
+        sql.getChannelByTable(this.tableId, function(row) {
+            if (!row) return;
+            var chan = channel.fromRow(row);
+            if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
+            self._claimSettlement(chan);
+        });
     },
 
     showCloseChannelDialog: function() {
@@ -600,7 +671,6 @@ var tableUI = {
     _startDisputePoller: function(chan) {
         if (this._disputePoller) clearInterval(this._disputePoller);
         var self = this;
-        // Poll every 60 seconds to check if timeout has passed
         this._disputePoller = setInterval(function() {
             MDS.cmd('block', function(resp) {
                 if (!resp || !resp.response || !resp.response.block) return;
@@ -608,7 +678,18 @@ var tableUI = {
                 var start   = parseInt(chan.disputeStartBlock || 0);
                 var timeout = parseInt(chan.timeoutBlocks || 30);
                 var remaining = timeout - (current - start);
-                MDS.log('Dispute poller: ' + remaining + ' blocks remaining');
+                // Update countdown display
+                var el = document.getElementById('disputeCountdown');
+                var btn = document.getElementById('claimSettleBtn');
+                if (el) {
+                    if (remaining <= 0) {
+                        el.textContent = 'Ready to claim!';
+                        el.style.color = 'green';
+                        if (btn) btn.style.display = '';
+                    } else {
+                        el.textContent = remaining + ' blocks remaining (~' + remaining + ' min)';
+                    }
+                }
                 if (remaining <= 0) {
                     clearInterval(self._disputePoller);
                     self._disputePoller = null;
@@ -621,12 +702,11 @@ var tableUI = {
     _claimSettlement: function(chan) {
         var self = this;
         chan.claimSettlement(function(err, res) {
-            if (err) {
-                pokerModal.alert('Claim failed: ' + err, 'error');
-                return;
-            }
-            pokerModal.alert('Settlement claimed! Funds distributed on-chain.', 'success');
-            self.loadChannelInfo();
+            if (err) { pokerModal.alert('Claim failed: ' + err, 'error'); return; }
+            self._clearTimers();
+            sql.deleteTable(self.tableId, function() {
+                setTimeout(function() { goBackToLobby(); }, 500);
+            });
         });
     },
 
