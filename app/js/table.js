@@ -566,18 +566,14 @@ var tableUI = {
     closeChannelCooperative: function() {
         if (!this.channelInfo) { pokerModal.alert('No channel to close', 'error'); return; }
         var self = this;
-        pokerModal.confirm('Close channel and withdraw funds?', function(ok) {
-            if (!ok) return;
-            sql.getChannelByTable(self.tableId, function(row) {
-                if (!row) { pokerModal.alert('Channel not found', 'error'); return; }
-                var chan = channel.fromRow(row);
-                if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
-                chan.closeCooperative(function(err, txid) {
-                    if (err) { pokerModal.alert('Close failed: ' + err, 'error'); return; }
-                    pokerModal.alert('Channel closed. Funds returned to wallets.', 'success');
-                    self._clearTimers();
-                    self.loadChannelInfo();
-                });
+        sql.getChannelByTable(self.tableId, function(row) {
+            if (!row) { pokerModal.alert('Channel not found', 'error'); return; }
+            var chan = channel.fromRow(row);
+            if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
+            chan.closeCooperative(function(err) {
+                if (err) { pokerModal.alert('Close failed: ' + err, 'error'); return; }
+                self._clearTimers();
+                self.loadChannelInfo();
             });
         });
     },
@@ -733,9 +729,19 @@ var tableUI = {
             return;
         }
         if (message.type === 'CHANNEL_CLOSED' && message.tableId === this.tableId) {
-            pokerModal.alert('Channel closed. Funds returned to wallets.', 'success');
             this._clearTimers();
-            this.loadChannelInfo();
+            var tid = this.tableId;
+            // Delete table and go to lobby
+            sql.deleteTable(tid, function() {
+                MDS.cmd('maxcontacts action:list', function(res) {
+                    var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+                    for (var i = 0; i < contacts.length; i++) {
+                        var key = contacts[i].publickey || '';
+                        if (key) maxima.sendRaw(key, { type: 'TABLE_DELETE', tableId: tid }, function() {});
+                    }
+                });
+            });
+            setTimeout(function() { goBackToLobby(); }, 500);
             return;
         }
         if (message.type === 'DISPUTE_NOTIFY' && message.tableId === this.tableId) {
