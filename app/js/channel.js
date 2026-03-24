@@ -656,7 +656,19 @@ Channel.prototype.closeCooperative = function(callback) {
 
     self._createSpendFundingTxn(total, outputs, function(err, spendTx) {
         if (err) { callback(err); return; }
-        signTxn(spendTx, 'auto', function(err2, signed) {
+        // Find our walletKey from participants
+        var myMaxKey = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :
+                       (typeof window !== 'undefined' ? window.myMaximaKey : '');
+        var myWalletKey = '';
+        for (var k2 = 0; k2 < self.participants.length; k2++) {
+            if (self.participants[k2].pubKey === myMaxKey) {
+                myWalletKey = self.participants[k2].walletKey || '';
+                break;
+            }
+        }
+        if (!myWalletKey) myWalletKey = (typeof getMyWalletKey === 'function') ? getMyWalletKey() :
+                                        (typeof window !== 'undefined' ? window.myMinimaPublicKey : '');
+        signTxn(spendTx, myWalletKey, function(err2, signed) {
             if (err2) { callback(err2); return; }
             // Send to other participants to co-sign and post
             var myMaxKey = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :

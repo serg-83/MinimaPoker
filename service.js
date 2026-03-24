@@ -524,27 +524,30 @@ var messageHandlers = {
     },
 
     CLOSE_REQUEST: function(message, fromPubKey) {
-        // Auto-sign and post — no UI confirmation needed for cooperative close
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('CLOSE_REQUEST: channel not found'); return; }
-            log('CLOSE_REQUEST: signing spend tx, fundingAddress=' + (chan.fundingAddress || 'unknown'));
-            signTxnAsync(message.spendTx, 'auto', function(err, signed) {
+            // Find our walletKey from participants
+            var myMaxKey = getMyMaximaKey();
+            var myWalletKey = '';
+            for (var i = 0; i < chan.participants.length; i++) {
+                if (chan.participants[i].pubKey === myMaxKey) {
+                    myWalletKey = chan.participants[i].walletKey || '';
+                    break;
+                }
+            }
+            if (!myWalletKey) myWalletKey = getMyWalletKey();
+            log('CLOSE_REQUEST: signing with walletKey=' + myWalletKey.substring(0, 20));
+            signTxnAsync(message.spendTx, myWalletKey, function(err, signed) {
                 if (err) { log('CLOSE_REQUEST sign error: ' + err); return; }
-                // Check tx validity before posting
-                var checkId = 'chk_' + randomString();
-                MDS.cmd('txnimport id:' + checkId + ' data:' + signed + ';txncheck id:' + checkId + ';txndelete id:' + checkId, function(chkRes) {
-                    var chk = Array.isArray(chkRes) ? chkRes[1] : null;
-                    log('CLOSE_REQUEST txncheck: ' + JSON.stringify(chk && chk.response));
-                    postTxnAsync(signed, function(err, res) {
-                        if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
-                        log('CLOSE_REQUEST: posted ok: ' + JSON.stringify(res && res.response));
-                        chan.status = 'CLOSED';
-                        sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
-                            channel.set(chan.id, chan);
-                            maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
-                            MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
-                            debouncedRefreshTable(chan.tableId);
-                        });
+                postTxnAsync(signed, function(err, res) {
+                    if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
+                    log('CLOSE_REQUEST: posted ok');
+                    chan.status = 'CLOSED';
+                    sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
+                        channel.set(chan.id, chan);
+                        maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
+                        MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
+                        debouncedRefreshTable(chan.tableId);
                     });
                 });
             });
