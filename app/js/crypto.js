@@ -119,15 +119,15 @@ function combineSeeds(seeds) {
  * Returns a random integer between 0 and max-1.
  */
 function seededRandom(seed, max) {
-    // Convert seed hex to a state
-    var state = 0;
-    for (var i = 0; i < Math.min(seed.length, 32); i += 2) {
+    // FNV-1a hash over ALL bytes of seed hex string
+    var state = 0x811c9dc5;
+    for (var i = 0; i < seed.length - 1; i += 2) {
         var byte = parseInt(seed.substr(i, 2), 16) || 0;
-        state = (state * 0x01000193) ^ byte;
-        state = state >>> 0;
+        state = state ^ byte;
+        state = (state * 0x01000193) >>> 0;
     }
 
-    // SplitMix64 PRNG
+    // SplitMix32 PRNG
     function splitMix(x) {
         x = (x + 0x9e3779b9) >>> 0;
         var z = x;
@@ -155,7 +155,9 @@ function seededShuffle(array, seed) {
         shuffled.push(array[k]);
     }
     for (var i = shuffled.length - 1; i > 0; i--) {
-        var j = seededRandom(seed + i, i + 1);
+        // Convert index to 4-char zero-padded hex to ensure even length and unique per-iteration input
+        var idxHex = ('0000' + i.toString(16)).slice(-4);
+        var j = seededRandom(seed + idxHex, i + 1);
         var temp = shuffled[i];
         shuffled[i] = shuffled[j];
         shuffled[j] = temp;

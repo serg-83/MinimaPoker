@@ -66,16 +66,25 @@ function renderTableList() {
                         e.stopPropagation();
                         pokerModal.confirm('Delete this table?', function(ok) {
                             if (!ok) return;
-                            sql.deleteTable(tableId, function() {
-                                MDS.cmd('maxcontacts action:list', function(res) {
-                                    var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
-                                    var msg = { type: 'TABLE_DELETE', tableId: tableId };
-                                    for (var c = 0; c < contacts.length; c++) {
-                                        var key = contacts[c].publickey || '';
-                                        if (key) maxima.sendWithAck(key, msg, function() {});
-                                    }
+                            sql.getPlayers(tableId, function(players) {
+                                var others = (players || []).filter(function(p) {
+                                    return (p.playerPubKey || p.PLAYERPUBKEY) !== window.myMaximaKey;
                                 });
-                                loadTables();
+                                if (others.length > 0) {
+                                    pokerModal.alert('Cannot delete: ' + others.length + ' player(s) still at the table', 'error');
+                                    return;
+                                }
+                                sql.deleteTable(tableId, function() {
+                                    MDS.cmd('maxcontacts action:list', function(res) {
+                                        var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+                                        var msg = { type: 'TABLE_DELETE', tableId: tableId };
+                                        for (var c = 0; c < contacts.length; c++) {
+                                            var key = contacts[c].publickey || '';
+                                            if (key) maxima.sendWithAck(key, msg, function() {});
+                                        }
+                                    });
+                                    loadTables();
+                                });
                             });
                         });
                     };
@@ -201,18 +210,21 @@ function handleChannelRequest(data) {
             maxima.sendWithAck(data.from, { type: 'REQUEST_DENIED', tableId: data.tableId }, function() {});
             return;
         }
-        var chan = new channel.Channel(data.tableId, data.participants, data.tokenId || '0x00', data.timeout || 1000);
+        var chan = new channel.Channel(data.tableId, data.participants, data.tokenId || '0x00', data.timeout || 30);
         chan.id = data.channelId;
         chan.status = 'FUNDING';
-        sql.insertChannelFull(chan, function(res) {
-            if (!res || !res.status) {
-                pokerModal.alert('Failed to save channel locally', 'error');
-                return;
-            }
-            channel.set(chan.id, chan);
-            maxima.sendWithAck(data.from, { type: 'REQUEST_ACCEPTED', channelId: data.channelId, tableId: data.tableId }, function(success) {
-                if (success) pokerModal.alert('Channel accepted, waiting for funding...', 'success');
-                else pokerModal.alert('Failed to send acceptance', 'error');
+        chan.init(function(err) {
+            if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
+            sql.insertChannelFull(chan, function(res) {
+                if (!res || !res.status) {
+                    pokerModal.alert('Failed to save channel locally', 'error');
+                    return;
+                }
+                channel.set(chan.id, chan);
+                maxima.sendWithAck(data.from, { type: 'REQUEST_ACCEPTED', channelId: data.channelId, tableId: data.tableId, participants: data.participants }, function(success) {
+                    if (success) pokerModal.alert('Channel accepted, waiting for funding...', 'success');
+                    else pokerModal.alert('Failed to send acceptance', 'error');
+                });
             });
         });
     });
@@ -223,6 +235,8 @@ function handleServiceMessage(message) {
         loadTables();
     } else if (message.type === 'CHANNEL_REQUEST') {
         handleChannelRequest(message);
+    } else if (message.type === 'LOBBY_CHAT') {
+        if (window._lobbyChat && window._lobbyChat.receive) window._lobbyChat.receive(message);
     }
 }
 

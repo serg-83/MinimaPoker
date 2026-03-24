@@ -153,55 +153,11 @@
         <button class="btn btn-play" id="playBtn" disabled onclick="goPlay()">
             <span class="spinner" id="play-spinner"></span>Play
         </button>
-        <br><br>
-        <button class="btn btn-play" onclick="document.getElementById('help-modal').style.display='flex'">Help</button>
-    </div>
-</div>
-
-<div id="help-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)this.style.display='none'">
-    <div style="background:linear-gradient(145deg,#1e2b3a,#0f1a24);border:2px solid #d4af37;border-radius:20px;padding:24px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto;color:#f0e6c8;position:relative;">
-        <button onclick="document.getElementById('help-modal').style.display='none'" style="position:absolute;top:12px;right:16px;background:none;border:none;color:#d4af37;font-size:1.8rem;cursor:pointer;line-height:1">&times;</button>
-        <h2 style="color:#d4af37;font-family:Georgia,serif;margin-bottom:16px">Poker Rules &amp; Help</h2>
-
-        <h3 style="color:#d4af37;margin:12px 0 8px">Hand Rankings</h3>
-        <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
-            <tr style="background:rgba(212,175,55,0.15)"><th style="text-align:left;padding:6px">Hand</th><th style="text-align:left;padding:6px">Example</th></tr>
-            <tr><td style="padding:5px 6px"><strong>Royal Flush</strong></td><td style="padding:5px 6px;font-family:monospace">A K Q J 10 ♠</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Straight Flush</strong></td><td style="padding:5px 6px;font-family:monospace">9 8 7 6 5 ♥</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Four of a Kind</strong></td><td style="padding:5px 6px;font-family:monospace">Q Q Q Q 2</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Full House</strong></td><td style="padding:5px 6px;font-family:monospace">J J J 4 4</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Flush</strong></td><td style="padding:5px 6px;font-family:monospace">A J 9 6 3 ♦</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Straight</strong></td><td style="padding:5px 6px;font-family:monospace">10 9 8 7 6</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Three of a Kind</strong></td><td style="padding:5px 6px;font-family:monospace">8 8 8 K 2</td></tr>
-            <tr><td style="padding:5px 6px"><strong>Two Pair</strong></td><td style="padding:5px 6px;font-family:monospace">A A 7 7 Q</td></tr>
-            <tr><td style="padding:5px 6px"><strong>One Pair</strong></td><td style="padding:5px 6px;font-family:monospace">K K 9 5 2</td></tr>
-            <tr><td style="padding:5px 6px"><strong>High Card</strong></td><td style="padding:5px 6px;font-family:monospace">A 10 8 4 2</td></tr>
-        </table>
-
-        <h3 style="color:#d4af37;margin:16px 0 8px">Actions</h3>
-        <ul style="list-style:none;padding:0;font-size:0.9rem;line-height:2">
-            <li><strong style="color:#d4af37">Fold</strong> — Discard hand, forfeit pot</li>
-            <li><strong style="color:#d4af37">Check</strong> — Pass, no bet required</li>
-            <li><strong style="color:#d4af37">Call</strong> — Match current bet</li>
-            <li><strong style="color:#d4af37">Raise</strong> — Increase current bet</li>
-        </ul>
-
-        <h3 style="color:#d4af37;margin:16px 0 8px">Payment Channel</h3>
-        <p style="font-size:0.88rem;line-height:1.5;color:#c0b090">All bets happen off-chain via an eltoo payment channel. Funds are locked on-chain and settled when the channel closes. Use <em>Cooperative close</em> for instant settlement, or <em>Dispute</em> to force on-chain resolution (~30 blocks).</p>
     </div>
 </div>
 
 <script>
     var _writeOk = false, _nodeOk = false, _maximaOk = false;
-
-    // Timeout: if no response in 5s — node unreachable
-    var _nodeTimeout = setTimeout(function() {
-        if (!_nodeOk) {
-            set('s-node', 'err', '✗ No node');
-            set('s-write', 'err', '—');
-            set('s-maxima', 'err', '—');
-        }
-    }, 5000);
 
     function set(id, cls, text) {
         document.getElementById(id).innerHTML = '<span class="' + cls + '">' + text + '</span>';
@@ -219,19 +175,12 @@
     MDS.init(function(msg) {
         if (msg.event !== 'inited') return;
 
-        // checkmode is the first real RPC call — if it succeeds, node is reachable
-        MDS.cmd('checkmode', function(res) {
-            clearTimeout(_nodeTimeout);
-            if (!res || !res.status) {
-                set('s-node', 'err', '✗ No node');
-                set('s-write', 'err', '—');
-                set('s-maxima', 'err', '—');
-                return;
-            }
-            _nodeOk = true;
-            set('s-node', 'ok', '✓ Connected');
+        _nodeOk = true;
+        set('s-node', 'ok', '✓ Connected');
 
-            var write = res.response && res.response.writemode;
+        // Check write permission
+        MDS.cmd('checkmode', function(res) {
+            var write = res && res.response && res.response.writemode;
             _writeOk = !!write;
             if (_writeOk) {
                 set('s-write', 'ok', '✓ Write');
@@ -244,16 +193,20 @@
 
         // Check Maxima
         MDS.cmd('maxima', function(res) {
-            _maximaOk = true;
             var connected = res && res.response && res.response.connected;
-            set('s-maxima', connected ? 'ok' : 'warn', connected ? '✓ Online' : '⚠ Offline');
+            _maximaOk = true; // Maxima not strictly required to play
+            if (connected) {
+                set('s-maxima', 'ok', '✓ Online');
+            } else {
+                set('s-maxima', 'warn', '⚠ Offline');
+            }
             checkReady();
         });
     });
 
     function goPlay() {
         var uid = typeof MDS !== 'undefined' ? MDS.minidappuid : null;
-        window.location.href = 'lobby.html' + (uid ? '?uid=' + encodeURIComponent(uid) : '');
+        window.location.href = 'index.html' + (uid ? '?uid=' + encodeURIComponent(uid) : '');
     }
 </script>
 </body>

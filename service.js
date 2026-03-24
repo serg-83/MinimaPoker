@@ -10,6 +10,7 @@ MDS.load('./app/js/poker.js');
 
 var SHOW_LOGS = true;
 var myMaximaKey  = '';
+var myWalletKey  = '';
 var myMaximaName = '';
 var pendingUpdates = {};
 
@@ -25,26 +26,17 @@ function getMyMaximaKey() {
     if (typeof window !== 'undefined' && window.myMaximaKey) return window.myMaximaKey;
     return '';
 }
+function getMyWalletKey() {
+    return myWalletKey || '';
+}
 
 // Notify frontend to refresh lobby
 function refreshLobby() { MDS.comms.solo(JSON.stringify({ type: 'REFRESH_LOBBY' })); }
 function refreshTable(tableId) { MDS.comms.solo(JSON.stringify({ type: 'REFRESH_TABLE', tableId: tableId })); }
 
-// Debounced refresh helpers
-var _refreshLobbyTimeout = null;
-function debouncedRefreshLobby() {
-    if (_refreshLobbyTimeout) clearTimeout(_refreshLobbyTimeout);
-    _refreshLobbyTimeout = setTimeout(function() { refreshLobby(); _refreshLobbyTimeout = null; }, 100);
-}
-
-var _refreshTableTimeouts = {};
-function debouncedRefreshTable(tableId) {
-    if (_refreshTableTimeouts[tableId]) clearTimeout(_refreshTableTimeouts[tableId]);
-    _refreshTableTimeouts[tableId] = setTimeout(function() {
-        refreshTable(tableId);
-        delete _refreshTableTimeouts[tableId];
-    }, 100);
-}
+// Rhino has no setTimeout — call directly
+function debouncedRefreshLobby() { refreshLobby(); }
+function debouncedRefreshTable(tableId) { refreshTable(tableId); }
 
 // Load channel from memory cache or DB
 function getChannel(channelId, callback) {
@@ -56,6 +48,9 @@ function getChannel(channelId, callback) {
         try {
             chan = channel.fromRow(row);
             channel.set(channelId, chan);
+            // Re-track scripts so node monitors coins at these addresses after restart
+            if (chan.fundingScript) channel.trackScript(chan.fundingScript, function() {});
+            if (chan.eltooScript) channel.trackScript(chan.eltooScript, function() {});
             callback(null, chan);
         } catch (e) {
             callback('Error reconstructing channel: ' + e, null);
@@ -68,6 +63,13 @@ function signTxnAsync(tx, key, callback) {
     channel.signTxn(tx, key, function(err, signed) {
         if (err) callback(new Error('Failed to sign: ' + err), null);
         else callback(null, signed);
+    });
+}
+
+function prepareTxnAsync(tx, callback) {
+    channel.prepareTxn(tx, function(err, prepared) {
+        if (err) callback(new Error('Failed to prepare: ' + err), null);
+        else callback(null, prepared);
     });
 }
 
@@ -94,29 +96,16 @@ MDS.init(function(msg) {
             initWallet(function(user) {
                 if (user) {
                     myMaximaKey  = user.maximaPublicKey;
+                    myWalletKey  = user.minimaPublicKey;
                     myMaximaName = user.maximaName;
                 }
-                // Register unified Maxima message handler
-                maxima.registerHandler('*', function(message, fromPubKey) {
-                    // Skip internal ACK messages
-                    if (message.type === 'ACK_MESSAGE' || message.type === 'SYNACK_MESSAGE') return;
-                    var handler = messageHandlers[message.type];
-                    if (handler) {
-                        try { handler(message, fromPubKey); }
-                        catch (e) { log('Error in handler ' + message.type + ': ' + e); }
-                    } else {
-                        log('Unknown message type: ' + message.type);
-                    }
-                });
+                maxima.init();
                 log('Service ready');
             });
         });
 
     } else if (msg.event === 'NEWBLOCK') {
         if (typeof sql === 'undefined') return;
-
-        // Clean up stale ACK requests (Rhino has no setInterval)
-        maxima.cleanupStaleAcks();
 
         // Mark channels as closed when conditions are met
         if (sql.updateClosedChannels) {
@@ -132,25 +121,31 @@ MDS.init(function(msg) {
         if (block % 5 !== 0) return;
 
         MDS.cmd('coins simplestate:true relevant:true', function(allcoins) {
+            if (!allcoins || !allcoins.response) return;
             var coincount = allcoins.response.length;
             sql.selectEltooChannels(function(eltoocoins) {
                 if (!eltoocoins || !eltoocoins.count) return;
                 for (var i = 0; i < coincount; i++) {
                     var coin = allcoins.response[i];
+                    if (!coin.state) continue;
                     for (var j = 0; j < eltoocoins.count; j++) {
                         var row = eltoocoins.rows[j];
                         if (row.ELTOOADDRESS !== coin.miniaddress) continue;
-                        var age = coin.age;
-                        var seq = coin.state[101];
-                        if (row.SEQUENCE > seq) {
+                        var age = parseInt(coin.age) || 0;
+                        var seq = parseInt(coin.state['101']) || 0;
+                        var dbSeq = parseInt(row.SEQUENCE) || 0;
+                        if (dbSeq > seq) {
                             if (sql.insertLog) sql.insertLog(row.HASHID, seq == 0 ? 'TRIGGER_ELTOO_FOUND' : 'INVALID_ELTOO_SEQUENCE_FOUND', 'coinage:' + age + '/' + MIN_UPDATE_COINAGE);
                             if (age >= MIN_UPDATE_COINAGE) {
                                 if (sql.insertLog) sql.insertLog(row.HASHID, 'POST_LATEST_UPDATE', 'sequence:' + row.SEQUENCE);
                                 (function(hashId) {
                                     getChannel(hashId, function(err, chan) {
                                         if (err || !chan) return;
-                                        postTxnAsync(chan.updateTx, function(err) {
-                                            if (!err) debouncedRefreshTable(chan.tableId);
+                                        prepareTxnAsync(chan.updateTx, function(err, prepared) {
+                                            if (err) return;
+                                            postTxnAsync(prepared, function(err) {
+                                                if (!err) debouncedRefreshTable(chan.tableId);
+                                            });
                                         });
                                     });
                                 })(row.HASHID);
@@ -164,8 +159,11 @@ MDS.init(function(msg) {
                                 (function(hashId) {
                                     getChannel(hashId, function(err, chan) {
                                         if (err || !chan) return;
-                                        postTxnAsync(chan.settlementTx, function(err) {
-                                            if (!err) debouncedRefreshTable(chan.tableId);
+                                        prepareTxnAsync(chan.settlementTx, function(err, prepared) {
+                                            if (err) return;
+                                            postTxnAsync(prepared, function(err) {
+                                                if (!err) debouncedRefreshTable(chan.tableId);
+                                            });
                                         });
                                     });
                                 })(row.HASHID);
@@ -180,6 +178,7 @@ MDS.init(function(msg) {
 
     } else if (msg.event === 'NEWCOIN') {
         if (typeof sql === 'undefined') return;
+        if (!msg.data || !msg.data.coin) return;
         var coin = msg.data.coin;
 
         // Check for funding coin
@@ -199,7 +198,7 @@ MDS.init(function(msg) {
         if (!coin.spent) {
             var payoutHashId = coin.state ? coin.state['200'] : undefined;
             if (payoutHashId === undefined) return;
-            var myAddr = window && window.myMinimaAddress ? window.myMinimaAddress : null;
+            var myAddr = (typeof currentUser !== 'undefined' && currentUser.minimaAddress) ? currentUser.minimaAddress : null;
             if (!myAddr || coin.miniaddress !== myAddr) return;
             sql.selectPayoutCoin(payoutHashId, function(res) {
                 if (!res || !res.count) return;
@@ -211,12 +210,38 @@ MDS.init(function(msg) {
 
     } else if (msg.event === 'MAXIMA') {
         maxima.handleIncoming(msg);
+    } else if (msg.event === 'MDSCOMMS') {
+        // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
+        // Only handle game-logic types, not chat/lobby (browser handles those directly)
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, CLOSE_CONFIRM: 1 };
+        try {
+            var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
+            var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
+            if (commsMsg && commsMsg.type && allowedCommsTypes[commsMsg.type] && messageHandlers[commsMsg.type]) {
+                log('MDSCOMMS dispatch: type=' + commsMsg.type);
+                messageHandlers[commsMsg.type](commsMsg, myMaximaKey);
+            }
+        } catch(e) { log('MDSCOMMS parse error: ' + e); }
     }
 });
 
 // ===== MESSAGE HANDLERS =====
 var messageHandlers = {
+    LOBBY_CHAT: function(message, fromPubKey) {
+        // Forward to all other contacts so everyone sees the message
+        MDS.cmd('maxcontacts action:list', function(res) {
+            var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+            for (var i = 0; i < contacts.length; i++) {
+                var key = contacts[i].publickey || '';
+                if (key && key !== fromPubKey) maxima.sendRaw(key, message, function() {});
+            }
+        });
+        // Notify frontend
+        MDS.comms.solo(JSON.stringify(message));
+    },
+
     TABLE_CREATE: function(message, fromPubKey) {
+        log('TABLE_CREATE received: ' + (message.table ? message.table.tableId : 'no tableId'));
         sql.getTableById(message.table.tableId, function(existing) {
             if (existing) { debouncedRefreshLobby(); return; }
             if (!message.table.creatorName) message.table.creatorName = '';
@@ -228,7 +253,10 @@ var messageHandlers = {
     },
 
     TABLE_DELETE: function(message, fromPubKey) {
-        sql.deleteTable(message.tableId, function() { debouncedRefreshLobby(); });
+        sql.deleteTable(message.tableId, function() {
+            debouncedRefreshLobby();
+            MDS.comms.solo(JSON.stringify({ type: 'TABLE_DELETED', tableId: message.tableId }));
+        });
     },
 
     TABLE_JOIN: function(message, fromPubKey) {
@@ -236,9 +264,32 @@ var messageHandlers = {
             debouncedRefreshLobby();
             debouncedRefreshTable(message.tableId);
         });
+        // Reply once with our own join so sender knows about us — but don't reply to replies
+        if (!message._reply && myMaximaKey && message.player && message.player.pubKey !== myMaximaKey) {
+            sql.getPlayers(message.tableId, function(players) {
+                for (var i = 0; i < players.length; i++) {
+                    if (players[i].playerPubKey === myMaximaKey) {
+                        MDS.cmd('getaddress', function(res) {
+                            var myAddr = (res && res.response) ? res.response.miniaddress : '';
+                            maxima.sendRaw(fromPubKey, { type: 'TABLE_JOIN', tableId: message.tableId, player: { pubKey: myMaximaKey, name: myMaximaName || '', address: myAddr, walletKey: myWalletKey || '' }, _reply: true }, function() {});
+                        });
+                        break;
+                    }
+                }
+            });
+        }
     },
 
     TABLE_LEAVE: function(message, fromPubKey) {
+        // If game is active and it's this player's turn — auto-fold
+        var game = poker.getGame(message.tableId);
+        if (game && game.round !== 'waiting' && game.round !== 'finished') {
+            var currentPlayer = game.players[game.currentPlayer];
+            if (currentPlayer && currentPlayer.pubKey === fromPubKey) {
+                game.act(fromPubKey, 'fold');
+                game._flushDbUpdate();
+            }
+        }
         sql.removePlayerFromTable(message.tableId, fromPubKey, function() {
             debouncedRefreshLobby();
             debouncedRefreshTable(message.tableId);
@@ -246,50 +297,64 @@ var messageHandlers = {
     },
 
     GAME_START: function(message, fromPubKey) {
+        var existing = poker.getGame(message.tableId);
+        if (existing && existing.round !== 'waiting' && existing.round !== 'finished') return;
         poker.initGame(message.tableId, message.channelId, message.players, message.blinds, function() {
             debouncedRefreshTable(message.tableId);
         });
     },
 
     REQUEST_NEW_CHANNEL: function(message, fromPubKey) {
-        MDS.comms.solo(JSON.stringify({
-            type: 'CHANNEL_REQUEST',
-            tableId: message.tableId,
-            from: fromPubKey,
-            participants: message.participants,
-            tokenId: message.tokenId,
-            timeout: message.timeout
-        }));
+        // Recipient: init channel (creates scripts/addresses) then save to DB, then notify browser
+        var chan = new channel.Channel(message.tableId, message.participants, message.tokenId || '0x00', message.timeout || 30);
+        chan.id = message.channelId;
+        chan.status = 'FUNDING';
+        chan.init(function(err) {
+            if (err) { log('REQUEST_NEW_CHANNEL init failed: ' + err); }
+            sql.insertChannelFull(chan, function() {
+                channel.set(chan.id, chan);
+                log('REQUEST_NEW_CHANNEL: channel saved, notifying browser');
+                MDS.comms.solo(JSON.stringify({
+                    type: 'CHANNEL_REQUEST',
+                    channelId: message.channelId,
+                    tableId: message.tableId,
+                    from: fromPubKey,
+                    participants: message.participants,
+                    tokenId: message.tokenId,
+                    timeout: message.timeout
+                }));
+            });
+        });
     },
 
     REQUEST_ACCEPTED: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for REQUEST_ACCEPTED: ' + message.channelId); return; }
-            chan.init(function(err) {
-                if (err) { log('Error initializing channel: ' + err); return; }
-                // Find my amount from participants
-                var myKey = getMyMaximaKey();
-                var myAmount = '0';
-                var totalAmount = new Decimal(0);
-                for (var i = 0; i < chan.participants.length; i++) {
-                    totalAmount = totalAmount.plus(chan.participants[i].amount);
-                    if (chan.participants[i].pubKey === myKey) myAmount = chan.participants[i].amount;
-                }
-                // Create funding tx (initiator contributes their share)
-                channel.createFundingTxn(chan.fundingAddress, myAmount, totalAmount.toString(), chan.tokenId, function(err, fundingHex) {
-                    if (err) { log('createFundingTxn failed: ' + err); return; }
-                    chan.fundingTx = fundingHex;
-                    signTxnAsync(chan.triggerTx, myKey, function(err, signedTrigger) {
+            var myKey = getMyMaximaKey();
+            var myAmount = '0';
+            var totalAmount = new Decimal(0);
+            // If chan.participants empty (DB load issue), use message participants
+            var parts = (chan.participants && chan.participants.length > 0) ? chan.participants : (message.participants || []);
+            log('REQUEST_ACCEPTED: participants=' + JSON.stringify(parts) + ' fundingAddress=' + chan.fundingAddress);
+            for (var i = 0; i < parts.length; i++) {
+                totalAmount = totalAmount.plus(parts[i].amount);
+                if (parts[i].pubKey === myKey) myAmount = parts[i].amount;
+            }
+            log('REQUEST_ACCEPTED: totalAmount=' + totalAmount + ' myAmount=' + myAmount);
+            if (totalAmount.equals(0)) { log('REQUEST_ACCEPTED: totalAmount is 0, aborting'); return; }
+            channel.createFundingTxn(chan.fundingAddress, myAmount, totalAmount.toString(), chan.tokenId, function(err, fundingHex) {
+                if (err) { log('createFundingTxn failed: ' + err); return; }
+                chan.fundingTx = fundingHex;
+                signTxnAsync(chan.triggerTx, getMyWalletKey(), function(err, signedTrigger) {
+                    if (err) { log(err); return; }
+                    signTxnAsync(chan.settlementTx, getMyWalletKey(), function(err, signedSettle) {
                         if (err) { log(err); return; }
-                        signTxnAsync(chan.settlementTx, myKey, function(err, signedSettle) {
-                            if (err) { log(err); return; }
-                            sendWithAckAsync(fromPubKey, {
-                                type: 'CREATE_CHANNEL', channelId: chan.id,
-                                fundingTx: chan.fundingTx, triggerTx: signedTrigger, settlementTx: signedSettle
-                            }, function(err) {
-                                if (!err) sql.updateChannelAfterFunding(chan.id, null, 'FUNDING', function() {});
-                            });
-                        });
+                        log('REQUEST_ACCEPTED: sending CREATE_CHANNEL fundingLen=' + fundingHex.length);
+                        maxima.sendRaw(fromPubKey, {
+                            type: 'CREATE_CHANNEL', channelId: chan.id,
+                            fundingTx: chan.fundingTx, triggerTx: signedTrigger, settlementTx: signedSettle
+                        }, function() {});
+                        sql.updateChannelAfterFunding(chan.id, null, 'FUNDING', null, function() {});
                     });
                 });
             });
@@ -300,32 +365,51 @@ var messageHandlers = {
         MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_DENIED', tableId: message.tableId }));
     },
 
+    CHANNEL_OPEN: function(message, fromPubKey) {
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('Channel not found for CHANNEL_OPEN: ' + message.channelId); return; }
+            chan.status = 'OPEN';
+            sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
+                debouncedRefreshTable(chan.tableId || message.tableId);
+            });
+        });
+    },
+
     CREATE_CHANNEL: function(message, fromPubKey) {
+        log('CREATE_CHANNEL received for: ' + message.channelId);
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for CREATE_CHANNEL: ' + message.channelId); return; }
-            chan.fundingTx    = message.fundingTx;
             chan.triggerTx    = message.triggerTx;
             chan.settlementTx = message.settlementTx;
-            // Find my amount to add to the funding tx
             var myKey = getMyMaximaKey();
             var myAmount = '0';
             for (var i = 0; i < chan.participants.length; i++) {
                 if (chan.participants[i].pubKey === myKey) { myAmount = chan.participants[i].amount; break; }
             }
-            channel.addToFundingTxn(chan.fundingTx, myAmount, chan.tokenId, function(err, fundingWithMyFunds) {
+            log('CREATE_CHANNEL: myAmount=' + myAmount + ' myKey=' + myKey.substring(0,20));
+            channel.addToFundingTxn(message.fundingTx, myAmount, chan.tokenId, function(err, fundingWithMyFunds) {
                 if (err) { log('addToFundingTxn failed: ' + err); return; }
-                chan.fundingTx = fundingWithMyFunds;
-                signTxnAsync(chan.triggerTx, myKey, function(err, trigger) {
-                    if (err) { log(err); return; }
-                    signTxnAsync(chan.settlementTx, myKey, function(err, settle) {
-                        if (err) { log(err); return; }
-                        signTxnAsync(chan.fundingTx, 'auto', function(err, funding) {
-                            if (err) { log(err); return; }
-                            sendWithAckAsync(fromPubKey, {
-                                type: 'FINISH_START_CHANNEL', channelId: chan.id,
-                                fundingTx: funding, triggerTx: trigger, settlementTx: settle
-                            }, function(err) {
-                                if (!err) sql.updateChannelAfterFunding(chan.id, null, 'FUNDING', function() {});
+                log('CREATE_CHANNEL: addToFundingTxn ok, adding scripts+MMR');
+                var mmrId = 'mmr_' + randomString();
+                MDS.cmd('txnimport id:' + mmrId + ' data:' + fundingWithMyFunds + ';txnscript id:' + mmrId + ' auto:true;txnmmr id:' + mmrId + ';txnexport id:' + mmrId + ';txndelete id:' + mmrId, function(mmrResp) {
+                    var fundingMmr = (mmrResp && Array.isArray(mmrResp) && mmrResp[3] && mmrResp[3].response && mmrResp[3].response.data) ? mmrResp[3].response.data : fundingWithMyFunds;
+                    log('CREATE_CHANNEL: signing trigger/settle with walletKey=' + getMyWalletKey().substring(0,20));
+                    signTxnAsync(chan.triggerTx, getMyWalletKey(), function(err, trigger) {
+                        if (err) { log('CREATE_CHANNEL sign trigger failed: ' + err); return; }
+                        signTxnAsync(chan.settlementTx, getMyWalletKey(), function(err, settle) {
+                            if (err) { log('CREATE_CHANNEL sign settle failed: ' + err); return; }
+                            signTxnAsync(fundingMmr, 'auto', function(err, funding) {
+                                if (err) { log('CREATE_CHANNEL sign funding failed: ' + err); return; }
+                                log('CREATE_CHANNEL: all signed, sending FINISH_START_CHANNEL');
+                                chan.triggerTx    = trigger;
+                                chan.settlementTx = settle;
+                                chan.fundingTx    = funding;
+                                sql.updateChannelTransactions(chan.id, funding, trigger, settle, function() {});
+                                maxima.sendRaw(fromPubKey, {
+                                    type: 'FINISH_START_CHANNEL', channelId: chan.id,
+                                    fundingTx: funding
+                                }, function() {});
+                                sql.updateChannelAfterFunding(chan.id, null, 'FUNDING', null, function() {});
                             });
                         });
                     });
@@ -335,50 +419,24 @@ var messageHandlers = {
     },
 
     FINISH_START_CHANNEL: function(message, fromPubKey) {
-        var chan = channel.get(message.channelId);
-        if (!chan) { log('Channel not in memory for FINISH_START_CHANNEL'); return; }
-        // Accumulate signatures: each participant sends their signed funding tx
-        if (!chan._finishResponses) chan._finishResponses = {};
-        chan._finishResponses[fromPubKey] = {
-            fundingTx: message.fundingTx,
-            triggerTx: message.triggerTx,
-            settlementTx: message.settlementTx
-        };
-        // Count non-self participants
-        var myKey = getMyMaximaKey();
-        var needed = 0;
-        for (var i = 0; i < chan.participants.length; i++) {
-            if (chan.participants[i].pubKey !== myKey) needed++;
-        }
-        var received = 0;
-        for (var k in chan._finishResponses) { if (chan._finishResponses.hasOwnProperty(k)) received++; }
-        if (received < needed) {
-            log('FINISH_START_CHANNEL: got ' + received + '/' + needed + ' responses');
-            return;
-        }
-        // All responses received — use the last funding tx (has all participants' funds added)
-        // Take the most-signed versions of trigger and settlement
-        var lastResp = chan._finishResponses[fromPubKey];
-        chan.triggerTx    = lastResp.triggerTx;
-        chan.settlementTx = lastResp.settlementTx;
-        chan.fundingTx    = lastResp.fundingTx;
-        signTxnAsync(chan.fundingTx, 'auto', function(err, signed) {
-            if (err) { log(err); return; }
-            chan.fundingTx = signed;
-            // Validate before posting (Thunder pattern)
-            var checkId = 'chk_' + randomString();
-            MDS.cmd('txnimport id:' + checkId + ' data:' + chan.fundingTx + ';txncheck id:' + checkId + ';txndelete id:' + checkId, function(chkRes) {
-                if (!chkRes || !Array.isArray(chkRes) || !chkRes[1] || !chkRes[1].response || !chkRes[1].response.validtransaction) {
-                    log('FINISH_START_CHANNEL: funding tx invalid: ' + JSON.stringify(chkRes && chkRes[1]));
-                    return;
-                }
-                postTxnAsync(chan.fundingTx, function(err, res) {
-                    if (err) { log(err); return; }
-                    chan.fundingTxId = res.response && res.response.txid ? res.response.txid : '';
-                    chan.status = 'OPEN';
-                    delete chan._finishResponses;
-                    sql.updateChannelAfterFunding(chan.id, chan.fundingTxId, 'OPEN', function() {
-                        debouncedRefreshTable(chan.tableId);
+        log('FINISH_START_CHANNEL received for: ' + message.channelId);
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('Channel not found for FINISH_START_CHANNEL: ' + message.channelId); return; }
+            log('FINISH_START_CHANNEL: signing funding tx');
+            signTxnAsync(message.fundingTx, 'auto', function(err, signed) {
+                if (err) { log('FINISH_START_CHANNEL sign failed: ' + err); return; }
+                log('FINISH_START_CHANNEL: preparing (adding local scripts+MMR)');
+                prepareTxnAsync(signed, function(err, prepared) {
+                    if (err) { log('FINISH_START_CHANNEL prepare failed: ' + err); return; }
+                    log('FINISH_START_CHANNEL: posting funding tx');
+                    postTxnAsync(prepared, function(err, postRes) {
+                        if (err) { log('FINISH_START_CHANNEL: post failed: ' + err); return; }
+                        log('FINISH_START_CHANNEL post result: ' + JSON.stringify(postRes));
+                        chan.status = 'OPEN';
+                        sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
+                            maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {});
+                            debouncedRefreshTable(chan.tableId);
+                        });
                     });
                 });
             });
@@ -386,17 +444,17 @@ var messageHandlers = {
     },
 
     SEND_FUNDS: function(message, fromPubKey) {
-        var chan = channel.get(message.channelId);
-        if (!chan) { log('Channel not found for SEND_FUNDS'); return; }
-        signTxnAsync(message.settlementTx, getMyMaximaKey(), function(err, settle) {
-            if (err) { log(err); return; }
-            signTxnAsync(message.updateTx, getMyMaximaKey(), function(err, update) {
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('Channel not found for SEND_FUNDS: ' + message.channelId); return; }
+            signTxnAsync(message.settlementTx, getMyWalletKey(), function(err, settle) {
                 if (err) { log(err); return; }
-                sendWithAckAsync(fromPubKey, {
-                    type: 'REPLY_SEND_FUNDS', channelId: message.channelId,
-                    settlementTx: settle, updateTx: update, sequence: message.sequence
-                }, function(err) {
+                signTxnAsync(message.updateTx, getMyWalletKey(), function(err, update) {
                     if (err) { log(err); return; }
+                    maxima.sendRaw(fromPubKey, {
+                        type: 'REPLY_SEND_FUNDS', channelId: message.channelId,
+                        settlementTx: settle, updateTx: update, sequence: message.sequence,
+                        balances: message.balances, gameState: message.gameState
+                    }, function() {});
                     chan.settlementTx  = settle;
                     chan.updateTx      = update;
                     chan.sequence      = message.sequence;
@@ -412,33 +470,32 @@ var messageHandlers = {
     },
 
     REPLY_SEND_FUNDS: function(message, fromPubKey) {
-        var chan = channel.get(message.channelId);
-        if (!chan) return;
-        var pending = pendingUpdates[message.channelId];
-        if (!pending) { log('No pending update for channel ' + message.channelId); return; }
-        chan.settlementTx  = message.settlementTx;
-        chan.updateTx      = message.updateTx;
-        chan.sequence      = message.sequence;
-        chan.balances      = pending.balances;
-        chan.lastGameState = pending.gameState;
-        sql.updateChannelAfterUpdate(chan.id, chan.settlementTx, chan.updateTx, chan.balances, chan.lastGameState, chan.sequence, function() {
-            delete pendingUpdates[message.channelId];
-            sql.saveChannelState(chan.id, { sequence: chan.sequence, balances: chan.balances, gameState: chan.lastGameState }, {}, function() {
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('Channel not found for REPLY_SEND_FUNDS'); return; }
+            chan.settlementTx  = message.settlementTx;
+            chan.updateTx      = message.updateTx;
+            chan.sequence      = message.sequence;
+            chan.balances      = message.balances || chan.balances;
+            chan.lastGameState = message.gameState || chan.lastGameState;
+            sql.updateChannelAfterUpdate(chan.id, chan.settlementTx, chan.updateTx, chan.balances, chan.lastGameState, chan.sequence, function() {
+                channel.set(chan.id, chan);
+                delete pendingUpdates[message.channelId];
                 debouncedRefreshTable(chan.tableId);
             });
         });
     },
 
     SPEND_CHANNEL: function(message, fromPubKey) {
-        var chan = channel.get(message.channelId);
-        if (!chan) return;
-        signTxnAsync(message.spendTx, getMyMaximaKey(), function(err, signed) {
-            if (err) { log(err); return; }
-            postTxnAsync(signed, function(err) {
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('Channel not found for SPEND_CHANNEL'); return; }
+            signTxnAsync(message.spendTx, getMyWalletKey(), function(err, signed) {
                 if (err) { log(err); return; }
-                chan.status = 'CLOSED';
-                sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', function() {
-                    debouncedRefreshTable(chan.tableId);
+                postTxnAsync(signed, function(err) {
+                    if (err) { log(err); return; }
+                    chan.status = 'CLOSED';
+                    sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
+                        debouncedRefreshTable(chan.tableId);
+                    });
                 });
             });
         });
@@ -446,8 +503,54 @@ var messageHandlers = {
 
     CHANNEL_CLOSE: function(message, fromPubKey) {
         sql.getChannelByTable(message.tableId, function(row) {
-            if (row) sql.updateChannelAfterFunding(row.hashId, null, 'CLOSED', function() {
+            if (row) sql.updateChannelAfterFunding(row.hashId, null, 'CLOSED', null, function() {
                 debouncedRefreshTable(message.tableId);
+            });
+        });
+    },
+
+    DISPUTE_NOTIFY: function(message, fromPubKey) {
+        MDS.comms.solo(JSON.stringify({ type: 'DISPUTE_NOTIFY', tableId: message.tableId, channelId: message.channelId }));
+    },
+
+    CLOSE_REQUEST: function(message, fromPubKey) {
+        MDS.comms.solo(JSON.stringify({
+            type: 'CLOSE_REQUEST_UI',
+            channelId: message.channelId,
+            tableId: message.tableId,
+            spendTx: message.spendTx,
+            from: fromPubKey
+        }));
+    },
+
+    CLOSE_CONFIRM: function(message, fromPubKey) {
+        // Browser confirmed — sign and post
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('CLOSE_CONFIRM: channel not found'); return; }
+            signTxnAsync(message.spendTx, getMyWalletKey(), function(err, signed) {
+                if (err) { log('CLOSE_CONFIRM sign error: ' + err); return; }
+                postTxnAsync(signed, function(err) {
+                    if (err) { log('CLOSE_CONFIRM post error: ' + err); return; }
+                    chan.status = 'CLOSED';
+                    sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
+                        channel.set(chan.id, chan);
+                        maxima.sendRaw(message.initiator, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
+                        MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
+                        debouncedRefreshTable(chan.tableId);
+                    });
+                });
+            });
+        });
+    },
+
+    CLOSE_ACCEPT: function(message, fromPubKey) {
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) return;
+            chan.status = 'CLOSED';
+            sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
+                channel.set(chan.id, chan);
+                MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
+                debouncedRefreshTable(chan.tableId);
             });
         });
     },
@@ -467,6 +570,31 @@ var messageHandlers = {
                 MDS.comms.solo(JSON.stringify({ type: 'DISPUTE_STARTED', tableId: chan.tableId, channelId: chan.id }));
             });
         });
+    },
+
+    BET: function(message, fromPubKey) {
+        var game = poker.getGame(message.tableId);
+        if (!game) return;
+        // Dedup: attach nonce or use action+player+round as key
+        var betKey = message.tableId + ':' + game.round + ':' + game.currentPlayer + ':' + message.player + ':' + message.action;
+        if (!betKey || (poker._lastBetKey && poker._lastBetKey === betKey)) return;
+        var ok = game.act(message.player, message.action, message.amount);
+        if (ok) {
+            poker._lastBetKey = betKey;
+            game._flushDbUpdate();
+            debouncedRefreshTable(message.tableId);
+            // Only enforcer (lowest pubKey) sends channel update
+            var myKey = getMyMaximaKey();
+            var isEnforcer = true;
+            for (var i = 0; i < game.players.length; i++) {
+                if (game.players[i].pubKey < myKey) { isEnforcer = false; break; }
+            }
+            if (isEnforcer) {
+                sendChannelUpdate(game, function(success) {
+                    if (!success) log('BET: sendChannelUpdate failed');
+                });
+            }
+        }
     },
 
     COMMIT: function(message, fromPubKey) {

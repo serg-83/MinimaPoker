@@ -25,7 +25,7 @@ var SQL = {
                 'tableId TEXT PRIMARY KEY, creator TEXT, creatorName TEXT DEFAULT \'\', ' +
                 'maxPlayers INTEGER, blinds TEXT, buyIn TEXT DEFAULT \'1000\', state TEXT DEFAULT \'waiting\', created INTEGER)',
             'CREATE TABLE IF NOT EXISTS players (' +
-                'tableId TEXT, playerPubKey TEXT, playerName TEXT, address TEXT, joined INTEGER, ' +
+                'tableId TEXT, playerPubKey TEXT, playerName TEXT, address TEXT, walletKey TEXT DEFAULT \'\', joined BIGINT, ' +
                 'PRIMARY KEY (tableId, playerPubKey))',
             'CREATE TABLE IF NOT EXISTS channels (' +
                 'hashId TEXT PRIMARY KEY, tableId TEXT, fundingTx TEXT, triggerTx TEXT, ' +
@@ -33,31 +33,59 @@ var SQL = {
                 'participants TEXT, balances TEXT, lastGameState TEXT, signatures TEXT, ' +
                 'status TEXT, sequence INTEGER DEFAULT 0, timeout INTEGER, fundingTxId TEXT, ' +
                 'disputeStartBlock INTEGER, fundingSpent INTEGER DEFAULT 0, ' +
-                'payoutFound INTEGER DEFAULT 0, payoutAmount TEXT, createdAt INTEGER)',
+                'payoutFound INTEGER DEFAULT 0, payoutAmount TEXT, createdAt BIGINT)',
             'CREATE TABLE IF NOT EXISTS channel_states (' +
                 'id INTEGER AUTO_INCREMENT PRIMARY KEY, channelId TEXT, sequence INTEGER, ' +
-                'state TEXT, signatures TEXT, createdAt INTEGER)',
+                'state TEXT, signatures TEXT, createdAt BIGINT)',
             'CREATE TABLE IF NOT EXISTS game_states (' +
                 'tableId TEXT PRIMARY KEY, round TEXT, pot TEXT, communityCards TEXT, ' +
                 'playerCards TEXT, players TEXT, turn INTEGER, lastAction TEXT, commits TEXT, reveals TEXT)',
             'CREATE TABLE IF NOT EXISTS logs (' +
-                'hashId TEXT, timestamp INTEGER, event TEXT, details TEXT)'
+                'hashId TEXT, timestamp BIGINT, event TEXT, details TEXT)',
+            'CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)'
         ];
-        var remaining = queries.length;
         var self = this;
-        for (var i = 0; i < queries.length; i++) {
-            (function(q) {
-                MDS.sql(q, function() {
-                    if (--remaining === 0) { self._invalidateCache('tables'); if (callback) callback(); }
-                });
-            })(queries[i]);
+        // Check if migration already done (version 2 = BIGINT timestamps)
+        MDS.sql("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)", function() {
+            MDS.sql("SELECT version FROM _schema_version WHERE version=2", function(vres) {
+                if (vres && vres.status && vres.rows && vres.rows.length > 0) {
+                    // Already migrated — just ensure tables exist
+                    runCreates();
+                } else {
+                    // Run migration
+                    var migrations = [
+                        'DROP TABLE IF EXISTS players',
+                        'DROP TABLE IF EXISTS channels',
+                        'DROP TABLE IF EXISTS channel_states',
+                        'DROP TABLE IF EXISTS logs',
+                        'DELETE FROM _schema_version',
+                        'INSERT INTO _schema_version (version) VALUES (2)'
+                    ];
+                    var mi = 0;
+                    function runMigrations() {
+                        if (mi >= migrations.length) { runCreates(); return; }
+                        MDS.sql(migrations[mi++], function() { runMigrations(); });
+                    }
+                    runMigrations();
+                }
+            });
+        });
+        function runCreates() {
+            var remaining = queries.length;
+            for (var i = 0; i < queries.length; i++) {
+                (function(q) {
+                    MDS.sql(q, function() {
+                        if (--remaining === 0) { self._invalidateCache('tables'); if (callback) callback(); }
+                    });
+                })(queries[i]);
+            }
         }
     },
 
     // -------------------- Tables --------------------
     insertTable: function(table, callback) {
         var self = this;
-        var q = 'INSERT INTO tables (tableId, creator, creatorName, maxPlayers, blinds, buyIn, state, created) VALUES (' +
+        var q = 'MERGE INTO tables (tableId, creator, creatorName, maxPlayers, blinds, buyIn, state, created) KEY(tableId) VALUES (' +
             this._esc(table.tableId) + ',' + this._esc(table.creator) + ',' + this._esc(table.creatorName) + ',' +
             parseInt(table.maxPlayers) + ',' + this._esc(table.blinds) + ',' + this._esc(table.buyIn || '1000') + ',' +
             this._esc(table.state || 'waiting') + ',' + Math.floor(Date.now() / 1000) + ')';
@@ -104,9 +132,9 @@ var SQL = {
     // -------------------- Players --------------------
     addPlayerToTable: function(tableId, player, callback) {
         var self = this;
-        var q = 'INSERT INTO players (tableId, playerPubKey, playerName, address, joined) VALUES (' +
+        var q = 'MERGE INTO players (tableId, playerPubKey, playerName, address, walletKey, joined) KEY(tableId, playerPubKey) VALUES (' +
             this._esc(tableId) + ',' + this._esc(player.pubKey) + ',' + this._esc(player.name) + ',' +
-            this._esc(player.address) + ',' + Date.now() + ')';
+            this._esc(player.address) + ',' + this._esc(player.walletKey || '') + ',' + Math.floor(Date.now()/1000) + ')';
         MDS.sql(q, function(res) {
             self._invalidateCache('players');
             self._invalidateCache(tableId);
@@ -125,23 +153,33 @@ var SQL = {
 
     getPlayers: function(tableId, callback) {
         MDS.sql("SELECT * FROM players WHERE tableId=" + this._esc(tableId), function(res) {
-            callback((res && res.status && res.rows) ? res.rows : []);
+            if (!res || !res.status || !res.rows) { callback([]); return; }
+            var rows = res.rows.map(function(row) {
+                var r = {};
+                for (var k in row) { if (row.hasOwnProperty(k)) r[k.toLowerCase()] = row[k]; }
+                r.playerPubKey = r.playerpubkey;
+                r.playerName   = r.playername;
+                r.tableId      = r.tableid;
+                r.walletKey    = r.walletkey || '';
+                return r;
+            });
+            callback(rows);
         });
     },
 
     // -------------------- Channels --------------------
     insertChannelFull: function(ch, callback) {
-        var q = 'INSERT INTO channels (' +
+        var q = 'MERGE INTO channels (' +
             'hashId, tableId, fundingTx, triggerTx, settlementTx, updateTx, fundingAddress, eltooAddress, ' +
             'participants, balances, lastGameState, signatures, status, sequence, timeout, fundingTxId, ' +
-            'disputeStartBlock, createdAt) VALUES (' +
+            'disputeStartBlock, createdAt) KEY(hashId) VALUES (' +
             this._esc(ch.id) + ',' + this._esc(ch.tableId) + ',' + this._esc(ch.fundingTx || '') + ',' +
             this._esc(ch.triggerTx || '') + ',' + this._esc(ch.settlementTx || '') + ',' + this._esc(ch.updateTx || '') + ',' +
             this._esc(ch.fundingAddress || '') + ',' + this._esc(ch.eltooAddress || '') + ',' +
             this._esc(JSON.stringify(ch.participants || [])) + ',' + this._esc(JSON.stringify(ch.balances || {})) + ',' +
             this._esc(JSON.stringify(ch.lastGameState || {})) + ',' + this._esc(JSON.stringify(ch.signatures || {})) + ',' +
             this._esc(ch.status || 'FUNDING') + ',' + (ch.sequence || 0) + ',' + (ch.timeoutBlocks || 0) + ',' +
-            this._esc(ch.fundingTxId || '') + ',' + (ch.disputeStartBlock || 'NULL') + ',' + Date.now() + ')';
+            this._esc(ch.fundingTxId || '') + ',' + (ch.disputeStartBlock || 'NULL') + ',' + Math.floor(Date.now()/1000) + ')';
         MDS.sql(q, callback);
     },
 
@@ -252,7 +290,7 @@ var SQL = {
     },
 
     selectEltooChannels: function(callback) {
-        MDS.sql("SELECT hashId, status, eltooAddress, sequence FROM channels WHERE eltooAddress IS NOT NULL AND eltooAddress != ''", function(res) {
+        MDS.sql("SELECT hashId, status, eltooAddress, sequence FROM channels WHERE eltooAddress IS NOT NULL AND eltooAddress != '' AND status NOT IN ('CLOSED','CANCELLED')", function(res) {
             if (callback) callback(res);
         });
     },
@@ -285,14 +323,16 @@ var SQL = {
     saveChannelState: function(channelId, state, signatures, callback) {
         var q = 'INSERT INTO channel_states (channelId, sequence, state, signatures, createdAt) VALUES (' +
             this._esc(channelId) + ',' + state.sequence + ',' +
-            this._esc(JSON.stringify(state)) + ',' + this._esc(JSON.stringify(signatures)) + ',' + Date.now() + ')';
+            this._esc(JSON.stringify(state)) + ',' + this._esc(JSON.stringify(signatures)) + ',' + Math.floor(Date.now()/1000) + ')';
         MDS.sql(q, callback);
     },
 
     getLatestChannelState: function(channelId, callback) {
         MDS.sql("SELECT * FROM channel_states WHERE channelId=" + this._esc(channelId) + " ORDER BY sequence DESC LIMIT 1", function(res) {
             if (!res || !res.status || !res.rows || !res.rows.length) { callback(null); return; }
-            var row = res.rows[0];
+            var raw = res.rows[0];
+            var row = {};
+            for (var k in raw) { if (raw.hasOwnProperty(k)) row[k.toLowerCase()] = raw[k]; }
             row.state      = JSON.parse(row.state      || '{}');
             row.signatures = JSON.parse(row.signatures || '{}');
             callback(row);
@@ -301,9 +341,10 @@ var SQL = {
 
     // -------------------- Game states --------------------
     setGameState: function(state, callback) {
-        var q = 'REPLACE INTO game_states (tableId, round, pot, communityCards, playerCards, turn, lastAction, commits, reveals) VALUES (' +
+        var q = 'MERGE INTO game_states (tableId, round, pot, communityCards, playerCards, players, turn, lastAction, commits, reveals) KEY(tableId) VALUES (' +
             this._esc(state.tableId) + ',' + this._esc(state.round) + ',' + this._esc(state.pot) + ',' +
             this._esc(JSON.stringify(state.communityCards || [])) + ',' + this._esc(JSON.stringify(state.playerCards || [])) + ',' +
+            this._esc(JSON.stringify(state.bets || {})) + ',' +
             (state.turn || 0) + ',' + this._esc(state.lastAction) + ',' +
             this._esc(JSON.stringify(state.commits || {})) + ',' + this._esc(JSON.stringify(state.reveals || {})) + ')';
         MDS.sql(q, callback);
@@ -312,24 +353,30 @@ var SQL = {
     getGameState: function(tableId, callback) {
         MDS.sql("SELECT * FROM game_states WHERE tableId=" + this._esc(tableId), function(res) {
             if (!res || !res.status || !res.rows || !res.rows.length) { callback(null); return; }
-            var row = res.rows[0];
-            row.communityCards = JSON.parse(row.communityCards || '[]');
-            row.playerCards    = JSON.parse(row.playerCards    || '[]');
+            var raw = res.rows[0];
+            var row = {};
+            for (var k in raw) { if (raw.hasOwnProperty(k)) row[k.toLowerCase()] = raw[k]; }
+            row.communityCards = JSON.parse(row.communitycards || '[]');
+            row.playerCards    = JSON.parse(row.playercards    || '[]');
             row.commits        = JSON.parse(row.commits        || '{}');
             row.reveals        = JSON.parse(row.reveals        || '{}');
+            var bets = JSON.parse(row.players || '{}');
+            row.bets = bets;
+            row.currentBet = 0;
+            for (var k2 in bets) { if (bets.hasOwnProperty(k2) && bets[k2] > row.currentBet) row.currentBet = bets[k2]; }
             callback(row);
         });
     },
 
     // -------------------- Logs --------------------
     insertLog: function(hashId, event, details, callback) {
-        if (SHOW_LOGS && typeof MDS !== 'undefined' && MDS.log) {
+        if (typeof SHOW_LOGS !== 'undefined' && SHOW_LOGS && typeof MDS !== 'undefined' && MDS.log) {
             MDS.log(hashId + '> ' + event + ': ' + (typeof details === 'string' ? details : JSON.stringify(details)));
         }
         var q = 'INSERT INTO logs (hashId, timestamp, event, details) VALUES (' +
-            this._esc(hashId) + ',' + Date.now() + ',' + this._esc(event) + ',' +
+            this._esc(hashId) + ',' + Math.floor(Date.now()/1000) + ',' + this._esc(event) + ',' +
             this._esc(typeof details === 'string' ? details : JSON.stringify(details)) + ')';
-        MDS.sql(q, callback);
+        MDS.sql(q, callback || function() {});
     },
 
     getLogs: function(hashId, callback) {

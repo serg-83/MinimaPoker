@@ -17,12 +17,14 @@
     <script src="app/js/maxima.js"></script>
     <script src="app/js/channel.js"></script>
     <script src="app/js/poker.js"></script>
-    <script src="app/js/tooltips.js"></script>
     <script src="app/js/table.js"></script>
 </head>
 <body>
     <div class="container">
-        <h1>Minima Poker</h1>
+        <div class="table-topbar">
+            <button type="button" id="backToLobby" class="topbar-btn" onclick="goBackToLobby()">&#8592;</button>
+            <div id="channel-status" class="topbar-channel"></div>
+        </div>
         <div id="game">
             <div class="poker-table">
                 <div class="community-cards" id="community"></div>
@@ -38,7 +40,6 @@
                 <div id="status"></div>
             </div>
         </div>
-        <button type="button" id="backToLobby" class="back-button" onclick="goBackToLobby()">&#8592;</button>
     </div>
 
     <script>
@@ -53,8 +54,45 @@
 
         function goBackToLobby() {
             var uid = typeof MDS !== 'undefined' ? MDS.minidappuid : null;
-            window.location.href = 'index.html' + (uid ? '?uid=' + encodeURIComponent(uid) : '');
+            var dest = 'lobby.html' + (uid ? '?uid=' + encodeURIComponent(uid) : '');
+
+            if (!tableId || typeof window.myMaximaKey === 'undefined' || !window.myMaximaKey) {
+                window.location.href = dest;
+                return;
+            }
+
+            var leaveMsg = { type: 'TABLE_LEAVE', tableId: tableId };
+            try { if (typeof sql !== 'undefined') sql.removePlayerFromTable(tableId, window.myMaximaKey, function() {}); } catch(e) {}
+
+            try {
+                MDS.cmd('maxcontacts action:list', function(res) {
+                    var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+                    var total = contacts.length, done = 0;
+                    if (total === 0) { window.location.href = dest; return; }
+                    for (var i = 0; i < contacts.length; i++) {
+                        var key = contacts[i].publickey || '';
+                        if (key && typeof maxima !== 'undefined') {
+                            maxima.sendRaw(key, leaveMsg, function() {
+                                if (++done >= total) window.location.href = dest;
+                            });
+                        } else {
+                            if (++done >= total) window.location.href = dest;
+                        }
+                    }
+                    // Fallback: redirect after 2s regardless
+                    setTimeout(function() { window.location.href = dest; }, 2000);
+                });
+            } catch(e) {
+                window.location.href = dest;
+            }
         }
+
+        window.addEventListener('beforeunload', function() {
+            if (!tableId || !window.myMaximaKey) return;
+            var leaveMsg = { type: 'TABLE_LEAVE', tableId: tableId };
+            try { if (typeof sql !== 'undefined') sql.removePlayerFromTable(tableId, window.myMaximaKey, function() {}); } catch(e) {}
+            // Best-effort sync send via navigator.sendBeacon not available in MDS context — just clean local DB
+        });
 
         MDS.init(function(msg) {
             if (msg.event === 'inited') {
@@ -67,6 +105,17 @@
                     }
                     sql.createTables(function() {
                         tableUI.init(tableId);
+                        // Announce join to all contacts
+                        var player = { pubKey: window.myMaximaKey, name: window.myMaximaName || '', address: window.myMinimaAddress || '', walletKey: window.myMinimaPublicKey || '' };
+                        sql.addPlayerToTable(tableId, player, function() {});
+                        MDS.cmd('maxcontacts action:list', function(res) {
+                            var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+                            var joinMsg = { type: 'TABLE_JOIN', tableId: tableId, player: player };
+                            for (var i = 0; i < contacts.length; i++) {
+                                var key = contacts[i].publickey || '';
+                                if (key) maxima.sendRaw(key, joinMsg, function() {});
+                            }
+                        });
                     });
                 });
             } else if (msg.event === 'MDSCOMMS') {
@@ -76,6 +125,8 @@
                         if (m.type && tableUI.handleServiceMessage) tableUI.handleServiceMessage(m);
                     } catch (e) {}
                 }
+            } else if (msg.event === 'MAXIMA') {
+                maxima.handleIncoming(msg);
             }
         });
     </script>

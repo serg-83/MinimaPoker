@@ -111,7 +111,7 @@ function genTableId() {
  * Generate a unique channel hash ID
  */
 function genChannelHashId() {
-    return genRandomHexString(32);
+    return '0x' + genRandomHexString(16);
 }
 
 // ==================== Additional ES5 utilities ====================

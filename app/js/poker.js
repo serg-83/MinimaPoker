@@ -26,7 +26,7 @@ function PokerGame(tableId, players, blinds, channelId) {
             secret: null
         });
     }
-    this.blinds = blinds; // { small: Decimal, big: Decimal }
+    this.blinds = { small: new Decimal(blinds.small), big: new Decimal(blinds.big) };
     this.dealer = 0;      // recalculated from seed in startGame()
     this.smallBlindPos = 1 % this.players.length;
     this.bigBlindPos = 2 % this.players.length;
@@ -54,6 +54,8 @@ PokerGame.prototype.startCommitPhase = function() {
 
 PokerGame.prototype.receiveCommit = function(pubKey, commitHash) {
     if (this.round !== 'commit') return false;
+    // Don't overwrite a real commit with a forced zero value
+    if (this.commits[pubKey] && commitHash === '0000000000000000000000000000000000000000000000000000000000000000') return false;
     this.commits[pubKey] = commitHash;
     var player = null;
     for (var i = 0; i < this.players.length; i++) {
@@ -66,10 +68,14 @@ PokerGame.prototype.receiveCommit = function(pubKey, commitHash) {
 
     // Debounced database persistence
     var self = this;
-    if (!this._pendingDbUpdate) {
-        this._pendingDbUpdate = setTimeout(function() {
-            self._flushDbUpdate();
-        }, 500); // Batch writes within 500ms
+    if (typeof setTimeout !== 'undefined') {
+        if (!this._pendingDbUpdate) {
+            this._pendingDbUpdate = setTimeout(function() {
+                self._flushDbUpdate();
+            }, 500);
+        }
+    } else {
+        this._flushDbUpdate();
     }
 
     // Check if all committed
@@ -83,10 +89,10 @@ PokerGame.prototype.receiveCommit = function(pubKey, commitHash) {
     if (allCommitted) {
         this.round = 'reveal';
         // Schedule immediate flush for round change
-        if (this._pendingDbUpdate) {
+        if (typeof clearTimeout !== 'undefined' && this._pendingDbUpdate) {
             clearTimeout(this._pendingDbUpdate);
-            this._pendingDbUpdate = null;
         }
+        this._pendingDbUpdate = null;
         this._flushDbUpdate();
     }
     return true;
@@ -94,7 +100,11 @@ PokerGame.prototype.receiveCommit = function(pubKey, commitHash) {
 
 PokerGame.prototype._flushDbUpdate = function() {
     this._pendingDbUpdate = null;
-    var state = this.getChannelState();
+    var self = this;
+    var bets = {};
+    for (var b = 0; b < this.players.length; b++) {
+        bets[this.players[b].pubKey] = this.players[b].bet.toNumber();
+    }
     sql.setGameState({
         tableId: this.tableId,
         round: this.round,
@@ -103,19 +113,38 @@ PokerGame.prototype._flushDbUpdate = function() {
         playerCards: (function(players) {
             var result = [];
             for (var i = 0; i < players.length; i++) {
-                result.push({ pubKey: players[i].pubKey, cards: players[i].cards });
+                // Store only card count, not actual cards — each client derives their own from seed
+                result.push({ pubKey: players[i].pubKey, cardCount: players[i].cards.length });
             }
             return result;
         })(this.players),
+        bets: bets,
         turn: this.currentPlayer,
-        lastAction: this.lastAction,
+        lastAction: this.round === 'finished' ? JSON.stringify(this.lastWinners || []) : this.lastAction,
         commits: this.commits,
         reveals: this.reveals
-    }, function() {});
+    }, function() {
+        // After showdown, enforcer sends final channel update with redistributed balances
+        if (self.round === 'finished') {
+            var myMaxKey = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :
+                           (typeof window !== 'undefined' ? window.myMaximaKey : '');
+            var isEnforcer = true;
+            for (var i = 0; i < self.players.length; i++) {
+                if (self.players[i].pubKey < myMaxKey) { isEnforcer = false; break; }
+            }
+            if (isEnforcer) {
+                sendChannelUpdate(self, function(ok) {
+                    if (!ok) MDS.log('showdown: sendChannelUpdate failed');
+                });
+            }
+        }
+    });
 };
 
 PokerGame.prototype.receiveReveal = function(pubKey, secret) {
     if (this.round !== 'reveal') return false;
+    // Don't overwrite a real reveal with a forced zero value
+    if (this.reveals[pubKey] && secret === '0000000000000000000000000000000000000000000000000000000000000000') return false;
     var player = null;
     for (var i = 0; i < this.players.length; i++) {
         if (this.players[i].pubKey === pubKey) {
@@ -133,17 +162,21 @@ PokerGame.prototype.receiveReveal = function(pubKey, secret) {
             return false;
         }
         if (computedHash !== self.commits[pubKey]) {
-            MDS.log('Invalid reveal for ' + pubKey);
+            MDS.log('Invalid reveal for ' + pubKey + ' computed=' + computedHash + ' stored=' + self.commits[pubKey] + ' round=' + self.round);
             return false;
         }
         self.reveals[pubKey] = secret;
         player.secret = secret;
 
         // Debounced database persistence
-        if (!self._pendingDbUpdate) {
-            self._pendingDbUpdate = setTimeout(function() {
-                self._flushDbUpdate();
-            }, 500);
+        if (typeof setTimeout !== 'undefined') {
+            if (!self._pendingDbUpdate) {
+                self._pendingDbUpdate = setTimeout(function() {
+                    self._flushDbUpdate();
+                }, 500);
+            }
+        } else {
+            self._flushDbUpdate();
         }
 
         // Check if all revealed
@@ -192,7 +225,7 @@ PokerGame.prototype.receiveReveal = function(pubKey, secret) {
 
             // Clear pending update and force flush
             if (self._pendingDbUpdate) {
-                clearTimeout(self._pendingDbUpdate);
+                if (typeof clearTimeout !== 'undefined') clearTimeout(self._pendingDbUpdate);
                 self._pendingDbUpdate = null;
             }
 
@@ -207,11 +240,6 @@ PokerGame.prototype.receiveReveal = function(pubKey, secret) {
 
             // Flush final state
             self._flushDbUpdate();
-
-            // Broadcast the initial game state via channel update
-            sendChannelUpdate(self, function(success) {
-                if (!success) MDS.log('Failed to send initial channel update');
-            });
         }
         return true;
     });
@@ -232,10 +260,18 @@ PokerGame.prototype.forceAct = function(pubKey) {
  */
 PokerGame.prototype.forceReveal = function(pubKey, callback) {
     var zeroSeed = '0000000000000000000000000000000000000000000000000000000000000000';
-    // Override commit so verification passes
-    this.commits[pubKey] = zeroSeed;
-    this.receiveReveal(pubKey, zeroSeed);
-    if (callback) callback();
+    var self = this;
+    // Compute SHA256(zeroSeed) to set as the commit, so verification in receiveReveal passes
+    cryptoUtils.commit(zeroSeed, '', function(err, hash) {
+        if (err || !hash) {
+            MDS.log('forceReveal: failed to compute hash for zero seed: ' + err);
+            if (callback) callback();
+            return;
+        }
+        self.commits[pubKey] = hash;
+        self.receiveReveal(pubKey, zeroSeed);
+        if (callback) callback();
+    });
 };
 
 /**
@@ -247,6 +283,7 @@ PokerGame.prototype.forceCommit = function(pubKey) {
 };
 
 PokerGame.prototype.combineSeeds = function() {
+    var seeds = [];
     for (var key in this.reveals) {
         if (this.reveals.hasOwnProperty(key)) {
             seeds.push(this.reveals[key]);
@@ -311,7 +348,7 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
             this.advanceTurn();
             break;
         case 'check':
-            if (this.getCurrentBet().greaterThan(0)) return false;
+            if (this.getCurrentBet().greaterThan(player.bet)) return false;
             this.lastAction = 'check';
             this.advanceTurn();
             break;
@@ -361,13 +398,16 @@ PokerGame.prototype.getCurrentBet = function() {
 };
 
 PokerGame.prototype.advanceTurn = function() {
+    this.players[this.currentPlayer].acted = true;
     var next = (this.currentPlayer + 1) % this.players.length;
-    while (next !== this.currentPlayer) {
+    var laps = 0;
+    while (laps < this.players.length) {
         if (!this.players[next].folded) {
             this.currentPlayer = next;
             break;
         }
         next = (next + 1) % this.players.length;
+        laps++;
     }
     if (this.isRoundComplete()) {
         this.nextRound();
@@ -377,23 +417,22 @@ PokerGame.prototype.advanceTurn = function() {
 PokerGame.prototype.isRoundComplete = function() {
     var active = [];
     for (var i = 0; i < this.players.length; i++) {
-        if (!this.players[i].folded) {
-            active.push(this.players[i]);
-        }
+        if (!this.players[i].folded) active.push(this.players[i]);
     }
     if (active.length === 1) return true;
     var currentBet = this.getCurrentBet();
     for (var j = 0; j < active.length; j++) {
         var p = active[j];
+        if (!p.acted) return false;
         if (!p.bet.equals(currentBet) && p.stack.greaterThan(0)) return false;
     }
     return true;
 };
 
 PokerGame.prototype.nextRound = function() {
-    // Move bets to pot
     for (var i = 0; i < this.players.length; i++) {
         this.players[i].bet = new Decimal(0);
+        this.players[i].acted = false;
     }
     if (this.round === 'preflop') {
         this.round = 'flop';
@@ -409,6 +448,12 @@ PokerGame.prototype.nextRound = function() {
         this.showdown();
         return;
     }
+    // If only one player left (everyone else folded), go straight to showdown
+    var stillActive = 0;
+    for (var sa = 0; sa < this.players.length; sa++) {
+        if (!this.players[sa].folded) stillActive++;
+    }
+    if (stillActive === 1) { this.round = 'showdown'; this.showdown(); return; }
     this.currentPlayer = (this.dealer + 1) % this.players.length;
     while (this.players[this.currentPlayer].folded) {
         this.currentPlayer = (this.currentPlayer + 1) % this.players.length;
@@ -425,61 +470,45 @@ PokerGame.prototype.dealCommunity = function(count) {
 PokerGame.prototype.showdown = function() {
     var active = [];
     for (var i = 0; i < this.players.length; i++) {
-        if (!this.players[i].folded) {
-            active.push(this.players[i]);
-        }
+        if (!this.players[i].folded) active.push(this.players[i]);
     }
+    var potAmount = this.pot;
     if (active.length === 1) {
         active[0].stack = active[0].stack.plus(this.pot);
+        this.lastWinners = [{ pubKey: active[0].pubKey, name: active[0].name, amount: potAmount.toString(), desc: 'wins (others folded)' }];
     } else {
         var evaluations = [];
         for (var j = 0; j < active.length; j++) {
             var p = active[j];
-            evaluations.push({
-                player: p,
-                hand: this.evaluateHand(p.cards, this.communityCards)
-            });
+            evaluations.push({ player: p, hand: this.evaluateHand(p.cards, this.communityCards) });
         }
-
-        // Sort by rank first, then by high cards for tie-breaking
         evaluations.sort(function(a, b) {
-            if (a.hand.rank !== b.hand.rank) {
-                return b.hand.rank - a.hand.rank;
-            }
-            // Same rank - compare high cards (kickers)
+            if (a.hand.rank !== b.hand.rank) return b.hand.rank - a.hand.rank;
             for (var hc = 0; hc < a.hand.highCards.length && hc < b.hand.highCards.length; hc++) {
-                if (a.hand.highCards[hc] !== b.hand.highCards[hc]) {
-                    return b.hand.highCards[hc] - a.hand.highCards[hc];
-                }
+                if (a.hand.highCards[hc] !== b.hand.highCards[hc]) return b.hand.highCards[hc] - a.hand.highCards[hc];
             }
-            // If still equal, compare next cards (if any)
             return 0;
         });
-
         var bestRank = evaluations[0].hand.rank;
         var bestHighCards = evaluations[0].hand.highCards;
         var winners = [];
-
         for (var k = 0; k < evaluations.length; k++) {
-            var eval = evaluations[k];
-            if (eval.hand.rank === bestRank) {
-                // Check if high cards match exactly
+            var ev = evaluations[k];
+            if (ev.hand.rank === bestRank) {
                 var isEqual = true;
-                for (var hc2 = 0; hc2 < bestHighCards.length && hc2 < eval.hand.highCards.length; hc2++) {
-                    if (bestHighCards[hc2] !== eval.hand.highCards[hc2]) {
-                        isEqual = false;
-                        break;
-                    }
+                for (var hc2 = 0; hc2 < bestHighCards.length && hc2 < ev.hand.highCards.length; hc2++) {
+                    if (bestHighCards[hc2] !== ev.hand.highCards[hc2]) { isEqual = false; break; }
                 }
-                if (isEqual) {
-                    winners.push(eval.player);
-                }
+                if (isEqual) winners.push(ev);
             }
         }
-
-        var share = this.pot.dividedBy(winners.length);
+        var share = this.pot.dividedToIntegerBy(winners.length);
+        var remainder = this.pot.minus(share.times(winners.length));
+        this.lastWinners = [];
         for (var w = 0; w < winners.length; w++) {
-            winners[w].stack = winners[w].stack.plus(share);
+            var winAmount = w === 0 ? share.plus(remainder) : share;
+            winners[w].player.stack = winners[w].player.stack.plus(winAmount);
+            this.lastWinners.push({ pubKey: winners[w].player.pubKey, name: winners[w].player.name, amount: winAmount.toString(), desc: winners[w].hand.description });
         }
     }
     this.pot = new Decimal(0);
@@ -517,187 +546,146 @@ PokerGame.prototype.getCardIndex = function(card) {
 };
 
 PokerGame.prototype.evaluateHandFast = function(cards) {
-    // Fast hand evaluation using bit masks
-    // This is a simplified version - for production use a pre-computed lookup table
-    var rankCounts = [0,0,0,0,0,0,0,0,0,0,0,0,0];
-    var suitCounts = [0,0,0,0];
+    var suits = 'shdc';
+    var rankCounts = [0,0,0,0,0,0,0,0,0,0,0,0,0]; // index 0=rank2 .. 12=rankA
+    var suitCards = [[], [], [], []]; // cards grouped by suit
 
     for (var i = 0; i < cards.length; i++) {
         var c = cards[i];
         var rank = this.cardRank(c[0]);
-        var suit = c[1];
-        rankCounts[rank-2]++;
-        var suitIdx = 'shdc'.indexOf(suit);
-        if (suitIdx >= 0) {
-            suitCounts[suitIdx]++;
+        var suitIdx = suits.indexOf(c[c.length - 1]);
+        rankCounts[rank - 2]++;
+        if (suitIdx >= 0) suitCards[suitIdx].push(rank);
+    }
+
+    // Check for flush and straight flush
+    var flushSuit = -1;
+    for (var s = 0; s < 4; s++) {
+        if (suitCards[s].length >= 5) { flushSuit = s; break; }
+    }
+
+    if (flushSuit >= 0) {
+        var flushRanks = suitCards[flushSuit].slice();
+        flushRanks.sort(function(a, b) { return b - a; });
+        // Check straight flush within flush suit
+        var sfHigh = this._findStraightHigh(flushRanks);
+        if (sfHigh > 0) {
+            var desc = sfHigh === 14 ? 'Royal Flush' : 'Straight Flush';
+            return { rank: 9, description: desc, highCards: [sfHigh] };
         }
     }
 
-    var isFlush = false;
-    for (var s = 0; s < suitCounts.length; s++) {
-        if (suitCounts[s] >= 5) {
-            isFlush = true;
-            break;
-        }
-    }
-
-    var ranks = [];
-    for (var r = 0; r < cards.length; r++) {
-        ranks.push(this.cardRank(cards[r][0]));
-    }
-    ranks.sort(function(a, b) { return b - a; });
-
-    var isStraight = this.isStraightFast(ranks);
-
-    // Check for straight flush
-    if (isFlush && isStraight) {
-        if (ranks[0] === 14 && ranks[1] === 5) return { rank: 9, description: 'Straight Flush', highCards: [5] };
-        return { rank: 9, description: 'Straight Flush', highCards: [ranks[0]] };
-    }
-
-    // Check for four of a kind
+    // Four of a kind (search from high to low)
     var fourRank = -1;
-    for (var fr = 0; fr < rankCounts.length; fr++) {
-        if (rankCounts[fr] === 4) {
-            fourRank = fr;
-            break;
-        }
+    for (var fr = 12; fr >= 0; fr--) {
+        if (rankCounts[fr] === 4) { fourRank = fr; break; }
     }
     if (fourRank >= 0) {
+        // Highest kicker not part of the four
         var kicker = -1;
-        for (var kr = 0; kr < rankCounts.length; kr++) {
-            if (rankCounts[kr] === 1) {
-                kicker = kr;
-                break;
-            }
+        for (var kr = 12; kr >= 0; kr--) {
+            if (kr !== fourRank && rankCounts[kr] > 0) { kicker = kr; break; }
         }
-        return { rank: 8, description: 'Four of a Kind', highCards: [fourRank+2, kicker+2] };
+        return { rank: 8, description: 'Four of a Kind', highCards: [fourRank + 2, kicker + 2] };
     }
 
-    // Check for full house
+    // Full house: find highest three, then highest pair (could be another three)
     var threeRank = -1;
-    for (var tr = 0; tr < rankCounts.length; tr++) {
-        if (rankCounts[tr] === 3) {
-            threeRank = tr;
-            break;
-        }
+    for (var t3 = 12; t3 >= 0; t3--) {
+        if (rankCounts[t3] >= 3) { threeRank = t3; break; }
     }
-    var pairRank = -1;
-    for (var pr = 0; pr < rankCounts.length; pr++) {
-        if (rankCounts[pr] === 2) {
-            pairRank = pr;
-            break;
+    if (threeRank >= 0) {
+        var pairRank = -1;
+        for (var p2 = 12; p2 >= 0; p2--) {
+            if (p2 !== threeRank && rankCounts[p2] >= 2) { pairRank = p2; break; }
         }
-    }
-    if (threeRank >= 0 && pairRank >= 0) {
-        return { rank: 7, description: 'Full House', highCards: [threeRank+2, pairRank+2] };
+        if (pairRank >= 0) {
+            return { rank: 7, description: 'Full House', highCards: [threeRank + 2, pairRank + 2] };
+        }
     }
 
-    // Flush
-    if (isFlush) {
-        var sortedRanks = [];
-        for (var sr = 0; sr < rankCounts.length; sr++) {
-            if (rankCounts[sr] > 0) {
-                sortedRanks.push(sr+2);
-            }
-        }
-        sortedRanks.sort(function(a, b) { return b - a; });
-        return { rank: 6, description: 'Flush', highCards: sortedRanks };
+    // Flush (not straight flush — already checked above)
+    if (flushSuit >= 0) {
+        var flushHigh = suitCards[flushSuit].slice();
+        flushHigh.sort(function(a, b) { return b - a; });
+        return { rank: 6, description: 'Flush', highCards: flushHigh.slice(0, 5) };
     }
 
     // Straight
-    if (isStraight) {
-        if (ranks[0] === 14 && ranks[1] === 5) return { rank: 5, description: 'Straight', highCards: [5] };
-        return { rank: 5, description: 'Straight', highCards: [ranks[0]] };
+    var allRanks = [];
+    for (var ar = 0; ar < cards.length; ar++) {
+        allRanks.push(this.cardRank(cards[ar][0]));
+    }
+    allRanks.sort(function(a, b) { return b - a; });
+    var straightHigh = this._findStraightHigh(allRanks);
+    if (straightHigh > 0) {
+        return { rank: 5, description: 'Straight', highCards: [straightHigh] };
     }
 
     // Three of a kind
     if (threeRank >= 0) {
-        var kickers2 = [];
-        for (var kr2 = 0; kr2 < rankCounts.length; kr2++) {
-            if (rankCounts[kr2] === 1) {
-                kickers2.push(kr2+2);
-            }
+        var kickers3 = [];
+        for (var k3 = 12; k3 >= 0; k3--) {
+            if (k3 !== threeRank && rankCounts[k3] > 0) kickers3.push(k3 + 2);
+            if (kickers3.length === 2) break;
         }
-        kickers2.sort(function(a, b) { return b - a; });
-        var result = [threeRank+2];
-        for (var kk = 0; kk < kickers2.length; kk++) {
-            result.push(kickers2[kk]);
-        }
-        return { rank: 4, description: 'Three of a Kind', highCards: result };
+        return { rank: 4, description: 'Three of a Kind', highCards: [threeRank + 2].concat(kickers3) };
     }
 
-    // Two pair
+    // Pairs
     var pairs = [];
-    for (var pr2 = 0; pr2 < rankCounts.length; pr2++) {
-        if (rankCounts[pr2] === 2) {
-            pairs.push(pr2+2);
-        }
-    }
-    pairs.sort(function(a, b) { return b - a; });
-    if (pairs.length >= 2) {
-        var kicker3 = -1;
-        for (var kr3 = 0; kr3 < rankCounts.length; kr3++) {
-            if (rankCounts[kr3] === 1) {
-                kicker3 = kr3;
-                break;
-            }
-        }
-        return { rank: 3, description: 'Two Pair', highCards: [pairs[0], pairs[1], kicker3+2] };
+    for (var pp = 12; pp >= 0; pp--) {
+        if (rankCounts[pp] === 2) pairs.push(pp);
     }
 
-    // One pair
+    if (pairs.length >= 2) {
+        // Two pair — take best two pairs + best kicker
+        var kicker2p = -1;
+        for (var k2p = 12; k2p >= 0; k2p--) {
+            if (k2p !== pairs[0] && k2p !== pairs[1] && rankCounts[k2p] > 0) { kicker2p = k2p; break; }
+        }
+        return { rank: 3, description: 'Two Pair', highCards: [pairs[0] + 2, pairs[1] + 2, kicker2p + 2] };
+    }
+
     if (pairs.length === 1) {
-        var kickers4 = [];
-        for (var kr4 = 0; kr4 < rankCounts.length; kr4++) {
-            if (rankCounts[kr4] === 1) {
-                kickers4.push(kr4+2);
-            }
+        // One pair
+        var kickers1p = [];
+        for (var k1p = 12; k1p >= 0; k1p--) {
+            if (k1p !== pairs[0] && rankCounts[k1p] > 0) kickers1p.push(k1p + 2);
+            if (kickers1p.length === 3) break;
         }
-        kickers4.sort(function(a, b) { return b - a; });
-        var result2 = [pairs[0]];
-        for (var kk2 = 0; kk2 < kickers4.length; kk2++) {
-            result2.push(kickers4[kk2]);
-        }
-        return { rank: 2, description: 'One Pair', highCards: result2 };
+        return { rank: 2, description: 'One Pair', highCards: [pairs[0] + 2].concat(kickers1p) };
     }
 
     // High card
     var highCards = [];
-    for (var hc = 0; hc < rankCounts.length; hc++) {
-        if (rankCounts[hc] > 0) {
-            highCards.push(hc+2);
-        }
+    for (var hc = 12; hc >= 0; hc--) {
+        if (rankCounts[hc] > 0) highCards.push(hc + 2);
+        if (highCards.length === 5) break;
     }
-    highCards.sort(function(a, b) { return b - a; });
-    highCards = highCards.slice(0,5);
     return { rank: 1, description: 'High Card', highCards: highCards };
 };
 
-PokerGame.prototype.isStraightFast = function(ranks) {
+// Find the highest card of a straight in the given sorted (desc) ranks, or 0 if no straight
+PokerGame.prototype._findStraightHigh = function(sortedRanks) {
     // Remove duplicates
-    var uniqueRanks = [];
-    for (var i = 0; i < ranks.length; i++) {
-        if (uniqueRanks.indexOf(ranks[i]) === -1) {
-            uniqueRanks.push(ranks[i]);
+    var unique = [];
+    for (var i = 0; i < sortedRanks.length; i++) {
+        if (unique.length === 0 || unique[unique.length - 1] !== sortedRanks[i]) {
+            unique.push(sortedRanks[i]);
         }
     }
-    uniqueRanks.sort(function(a, b) { return b - a; });
-    if (uniqueRanks.length < 5) return false;
-
-    // Check for Ace-low straight
-    if (uniqueRanks[0] === 14 && uniqueRanks[1] === 5 && uniqueRanks[2] === 4 &&
-        uniqueRanks[3] === 3 && uniqueRanks[4] === 2) {
-        return true;
+    if (unique.length < 5) return 0;
+    // Check consecutive sequences
+    for (var j = 0; j <= unique.length - 5; j++) {
+        if (unique[j] - unique[j + 4] === 4) return unique[j];
     }
-
-    // Check consecutive
-    for (var j = 0; j < uniqueRanks.length - 4; j++) {
-        if (uniqueRanks[j] - uniqueRanks[j+4] === 4) {
-            return true;
-        }
+    // Ace-low straight: A-2-3-4-5
+    if (unique[0] === 14) {
+        var low = unique.slice(-4);
+        if (low.length === 4 && low[0] === 5 && low[1] === 4 && low[2] === 3 && low[3] === 2) return 5;
     }
-    return false;
+    return 0;
 };
 
 PokerGame.prototype.cardRank = function(char) {
@@ -708,17 +696,33 @@ PokerGame.prototype.cardRank = function(char) {
 // Get state for channel update
 PokerGame.prototype.getChannelState = function() {
     var balances = {};
+    // Start with stacks (stack + pot = total channel money always, since bets are taken from stack and added to pot)
     for (var i = 0; i < this.players.length; i++) {
-        var p = this.players[i];
-        balances[p.pubKey] = p.stack.toString();
+        balances[this.players[i].pubKey] = new Decimal(this.players[i].stack);
     }
+    // Distribute unresolved pot evenly among non-folded players; folded players keep only their stack
+    if (this.pot.greaterThan(0) && this.players.length > 0) {
+        var activePlayers = [];
+        for (var a = 0; a < this.players.length; a++) {
+            if (!this.players[a].folded) activePlayers.push(this.players[a]);
+        }
+        var recipients = activePlayers.length > 0 ? activePlayers : this.players;
+        var share = this.pot.dividedToIntegerBy(recipients.length);
+        var remainder = this.pot.minus(share.times(recipients.length));
+        for (var p = 0; p < recipients.length; p++) {
+            balances[recipients[p].pubKey] = balances[recipients[p].pubKey].plus(share);
+        }
+        balances[recipients[0].pubKey] = balances[recipients[0].pubKey].plus(remainder);
+    }
+    // Convert to strings
+    var result = {};
+    for (var k in balances) { if (balances.hasOwnProperty(k)) result[k] = balances[k].toString(); }
     var playerCards = [];
     for (var j = 0; j < this.players.length; j++) {
-        var p2 = this.players[j];
-        playerCards.push({ pubKey: p2.pubKey, cards: p2.cards });
+        playerCards.push({ pubKey: this.players[j].pubKey, cards: this.players[j].cards });
     }
     return {
-        balances: balances,
+        balances: result,
         gameState: {
             round: this.round,
             pot: this.pot.toString(),
@@ -751,7 +755,7 @@ function initGame(tableId, channelId, players, blinds, callback) {
         playerCards: (function(players) {
             var result = [];
             for (var i = 0; i < players.length; i++) {
-                result.push({ pubKey: players[i].pubKey, cards: players[i].cards });
+                result.push({ pubKey: players[i].pubKey, cardCount: players[i].cards.length });
             }
             return result;
         })(game.players),
@@ -788,45 +792,22 @@ function handleReveal(tableId, playerPubKey, secret) {
  */
 function sendChannelUpdate(game, callback) {
     var chan = channel.get(game.channelId);
-    if (!chan) {
-        MDS.log('Channel not found: ' + game.channelId);
-        callback(false);
-        return;
-    }
-    var myKey = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :
-                (typeof window !== 'undefined' ? window.myMaximaKey : '');
-    var _pendingUpdates = (typeof pendingUpdates !== 'undefined') ? pendingUpdates :
-                          (typeof window !== 'undefined' ? window.pendingUpdates : {});
-    if (!_pendingUpdates) _pendingUpdates = {};
+    if (!chan) { MDS.log('Channel not found: ' + game.channelId); callback(false); return; }
+
+    var myWalletKey = (typeof getMyWalletKey === 'function') ? getMyWalletKey() :
+                      (typeof window !== 'undefined' ? window.myMinimaPublicKey : '');
+    var myMaxKey    = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :
+                      (typeof window !== 'undefined' ? window.myMaximaKey : '');
 
     var state = game.getChannelState();
     chan.createUpdateAsync(state.balances, state.gameState, function(err, update) {
-        if (err) {
-            MDS.log('createUpdateAsync error: ' + err);
-            callback(false);
-            return;
-        }
+        if (err) { MDS.log('createUpdateAsync error: ' + err); callback(false); return; }
 
-        channel.signTxn(update.settlementTx, myKey, function(err1, signedSettle) {
-            if (err1) {
-                MDS.log('signTxn settlement error: ' + err1);
-                callback(false);
-                return;
-            }
-            channel.signTxn(update.updateTx, myKey, function(err2, signedUpdate) {
-                if (err2) {
-                    MDS.log('signTxn update error: ' + err2);
-                    callback(false);
-                    return;
-                }
+        channel.signTxn(update.settlementTx, myWalletKey, function(err1, signedSettle) {
+            if (err1) { MDS.log('signTxn settlement error: ' + err1); callback(false); return; }
+            channel.signTxn(update.updateTx, myWalletKey, function(err2, signedUpdate) {
+                if (err2) { MDS.log('signTxn update error: ' + err2); callback(false); return; }
 
-                _pendingUpdates[game.channelId] = {
-                    balances: update.balances,
-                    gameState: update.gameState,
-                    sequence: update.sequence
-                };
-
-                // Send to each participant (except ourselves)
                 var sendMsg = {
                     type: 'SEND_FUNDS',
                     channelId: game.channelId,
@@ -837,35 +818,19 @@ function sendChannelUpdate(game, callback) {
                     gameState: update.gameState
                 };
                 var participants = chan.participants || [];
-                var sentCount = 0;
-                var totalToSend = 0;
-                var anyFailed = false;
+                var others = [];
                 for (var pi = 0; pi < participants.length; pi++) {
-                    if (participants[pi].pubKey !== myKey) {
-                        totalToSend++;
-                    }
+                    if (participants[pi].pubKey !== myMaxKey) others.push(participants[pi].pubKey);
                 }
-                if (totalToSend === 0) {
-                    callback(true);
-                    return;
-                }
-                for (var pj = 0; pj < participants.length; pj++) {
-                    if (participants[pj].pubKey !== myKey) {
-                        (function(pubKey) {
-                            maxima.sendWithAck(pubKey, sendMsg, function(success) {
-                                sentCount++;
-                                if (!success) anyFailed = true;
-                                if (sentCount === totalToSend) {
-                                    if (anyFailed) {
-                                        delete _pendingUpdates[game.channelId];
-                                        callback(false);
-                                    } else {
-                                        callback(true);
-                                    }
-                                }
-                            });
-                        })(participants[pj].pubKey);
-                    }
+                if (others.length === 0) { callback(true); return; }
+                var done = 0, anyFailed = false;
+                for (var oi = 0; oi < others.length; oi++) {
+                    (function(pk) {
+                        maxima.sendWithAck(pk, sendMsg, function(ok) {
+                            if (!ok) anyFailed = true;
+                            if (++done === others.length) callback(!anyFailed);
+                        });
+                    })(others[oi]);
                 }
             });
         });

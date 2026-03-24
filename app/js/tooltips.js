@@ -147,92 +147,20 @@ var pokerHelp = {
     },
 
     createHelpButton: function() {
-        var button = document.createElement('button');
-        button.id = 'help-button';
-        button.innerHTML = '?';
-        button.setAttribute('aria-label', 'Poker help');
-        document.body.appendChild(button);
+        var button = document.getElementById('help-button');
+        var modal  = document.getElementById('help-modal');
+        if (!button || !modal) return;
 
-        var modal = document.createElement('div');
-        modal.id = 'help-modal';
-        modal.innerHTML = this.generateModalHTML();
-        document.body.appendChild(modal);
-
-        button.addEventListener('click', function() {
-            modal.classList.add('active');
-        });
+        button.addEventListener('click', function() { modal.classList.add('active'); });
 
         var closeBtn = modal.querySelector('.close-modal');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', function() {
-                modal.classList.remove('active');
-            });
-        }
+        if (closeBtn) closeBtn.addEventListener('click', function() { modal.classList.remove('active'); });
 
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) {
-                modal.classList.remove('active');
-            }
-        });
+        modal.addEventListener('click', function(e) { if (e.target === modal) modal.classList.remove('active'); });
 
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && modal.classList.contains('active')) {
-                modal.classList.remove('active');
-            }
+            if (e.key === 'Escape' && modal.classList.contains('active')) modal.classList.remove('active');
         });
-    },
-
-    generateModalHTML: function() {
-        var handRows = '';
-        for (var i = 0; i < this.handRankings.length; i++) {
-            var hand = this.handRankings[i];
-            handRows += '<tr><td><strong>' + hand.name + '</strong></td><td>' + hand.description + '</td><td><span class="hand-example">' + hand.example + '</span></td><td>' + hand.odds + '</td></tr>';
-        }
-
-        return '<div class="modal-content">' +
-            '<div class="modal-header">' +
-                '<h2>Poker Rules &amp; Help</h2>' +
-                '<button class="close-modal">&times;</button>' +
-            '</div>' +
-            '<div class="modal-section">' +
-                '<h3>Hand Rankings (highest to lowest)</h3>' +
-                '<table class="hand-rankings-table">' +
-                    '<thead><tr><th>Hand</th><th>Description</th><th>Example</th><th>Odds</th></tr></thead>' +
-                    '<tbody>' + handRows + '</tbody>' +
-                '</table>' +
-            '</div>' +
-            '<div class="modal-section">' +
-                '<h3>Betting Rounds</h3>' +
-                '<div class="betting-rounds">' +
-                    '<div class="round-card"><h4>Pre-flop</h4><p>' + this.tooltips.preflop + '</p></div>' +
-                    '<div class="round-card"><h4>Flop</h4><p>' + this.tooltips.flop + '</p></div>' +
-                    '<div class="round-card"><h4>Turn</h4><p>' + this.tooltips.turn + '</p></div>' +
-                    '<div class="round-card"><h4>River</h4><p>' + this.tooltips.river + '</p></div>' +
-                    '<div class="round-card"><h4>Showdown</h4><p>' + this.tooltips.showdown + '</p></div>' +
-                '</div>' +
-            '</div>' +
-            '<div class="modal-section">' +
-                '<h3>Player Actions</h3>' +
-                '<ul style="list-style: none; padding: 0;">' +
-                    '<li style="margin-bottom: 10px;"><strong style="color: #d4af37;">Fold</strong> - ' + this.tooltips.fold + '</li>' +
-                    '<li style="margin-bottom: 10px;"><strong style="color: #d4af37;">Check</strong> - ' + this.tooltips.check + '</li>' +
-                    '<li style="margin-bottom: 10px;"><strong style="color: #d4af37;">Call</strong> - ' + this.tooltips.call + '</li>' +
-                    '<li style="margin-bottom: 10px;"><strong style="color: #d4af37;">Raise</strong> - ' + this.tooltips.raise + '</li>' +
-                '</ul>' +
-            '</div>' +
-            '<div class="modal-section">' +
-                '<h3>Game Elements</h3>' +
-                '<p><strong style="color: #d4af37;">Pot</strong> - ' + this.tooltips.pot + '</p>' +
-                '<p><strong style="color: #d4af37;">Community Cards</strong> - ' + this.tooltips.communityCards + '</p>' +
-                '<p><strong style="color: #d4af37;">Small Blind</strong> - ' + this.tooltips.smallBlind + '</p>' +
-                '<p><strong style="color: #d4af37;">Big Blind</strong> - ' + this.tooltips.bigBlind + '</p>' +
-                '<p><strong style="color: #d4af37;">Button</strong> - ' + this.tooltips.button + '</p>' +
-                '<p><strong style="color: #d4af37;">Payment Channel</strong> - ' + this.tooltips.channel + '</p>' +
-            '</div>' +
-            '<div class="modal-section">' +
-                '<p style="text-align: center; font-style: italic; color: #d4af37;">Hover over any button or element for quick help!</p>' +
-            '</div>' +
-        '</div>';
     },
 
     addTooltip: function(element, text, position) {

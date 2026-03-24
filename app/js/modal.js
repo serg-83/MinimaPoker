@@ -139,3 +139,33 @@ var pokerModal = {
 if (typeof window !== 'undefined') {
     window.pokerModal = pokerModal;
 }
+
+pokerModal.choice = function(title, message, options, callback) {
+    if (typeof document === 'undefined') return;
+    this._ensureOverlay();
+    var btns = '';
+    for (var i = 0; i < options.length; i++) {
+        btns += '<button class="poker-modal-btn primary" data-value="' + options[i].value + '">' + options[i].label + '</button>';
+    }
+    btns += '<button class="poker-modal-btn secondary" id="pm-cancel">Cancel</button>';
+    this._overlay.innerHTML =
+        '<div class="poker-modal">' +
+            '<div class="poker-modal-title">' + title + '</div>' +
+            '<div class="poker-modal-message">' + message + '</div>' +
+            '<div class="poker-modal-buttons" style="flex-direction:column;gap:8px">' + btns + '</div>' +
+        '</div>';
+    this._overlay.classList.add('active');
+    var self = this;
+    var close = function(val) {
+        self._overlay.classList.remove('active');
+        if (callback) callback(val);
+    };
+    var buttons = self._overlay.querySelectorAll('[data-value]');
+    for (var j = 0; j < buttons.length; j++) {
+        (function(btn) {
+            btn.onclick = function() { close(btn.getAttribute('data-value')); };
+        })(buttons[j]);
+    }
+    document.getElementById('pm-cancel').onclick = function() { close(null); };
+    this._overlay.onclick = function(e) { if (e.target === self._overlay) close(null); };
+};

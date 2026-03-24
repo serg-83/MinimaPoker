@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Minima Poker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="app/js/mds.js"></script>
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.14.1/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.14.1/jquery-ui.js"></script>
+    <link rel="stylesheet" href="app/css/style.css">
+    <script src="app/js/decimal.js"></script>
+    <script src="app/js/utils.js"></script>
+    <script src="app/js/modal.js"></script>
+    <script src="app/js/wallet.js"></script>
+    <script src="app/js/crypto.js"></script>
+    <script src="app/js/maxima.js"></script>
+    <script src="app/js/channel.js"></script>
+    <script src="app/js/poker.js"></script>
+    <script src="app/js/sql.js"></script>
+    <script src="app/js/lobby.js"></script>
+</head>
+<body>
+    <div class="container with-sidebar">
+        <!-- Contacts sidebar -->
+        <div class="sidebar" id="sidebar-contacts">
+            <div class="sidebar-header">
+                <h3>Contacts</h3>
+                <button type="button" class="sidebar-close" onclick="toggleSidebar('contacts')">&times;</button>
+            </div>
+            <div class="sidebar-content" id="contacts-list-sidebar">
+                <div class="contacts-loading">Loading contacts...</div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="my-contact-label">My Contact</div>
+                <div class="my-contact-address" onclick="copySidebarContact()">
+                    <span id="sidebar-contact-text">Loading...</span>
+                    <span class="copy-icon">📋</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tables sidebar -->
+        <div class="sidebar" id="sidebar-tables">
+            <div class="sidebar-header">
+                <h3>Active Tables</h3>
+                <button type="button" class="sidebar-close" onclick="toggleSidebar('tables')">&times;</button>
+            </div>
+            <div class="sidebar-content" id="tables-list-sidebar">
+                <div class="tables-loading">Loading tables...</div>
+            </div>
+        </div>
+
+        <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar('all')"></div>
+
+        <!-- Main content -->
+        <div class="main-content">
+            <h1>Minima Poker</h1>
+
+            <div id="balance-container" class="balance-container">
+                <div class="balance-icon">💰</div>
+                <div class="balance-text">
+                    <span class="balance-label">Your Balance</span>
+                    <span id="balance-amount" class="balance-amount">0</span>
+                    <span class="balance-currency">Minima</span>
+                </div>
+            </div>
+
+            <div id="lobby">
+                <ul id="tables"></ul>
+            </div>
+
+            <!-- Global Chat -->
+            <hr class="lobby-divider">
+            <div id="lobby-chat" class="lobby-chat">
+                <div class="lobby-chat-header">
+                    <span>💬 Global Chat</span>
+                    <span id="lobby-chat-online" class="lobby-chat-online"></span>
+                </div>
+                <div id="lobby-chat-messages" class="lobby-chat-messages"></div>
+                <div class="lobby-chat-input-row">
+                    <input type="text" id="lobby-chat-input" class="lobby-chat-input" placeholder="Message..." maxlength="200">
+                    <button type="button" class="lobby-chat-send" id="lobby-chat-send">&#9654;</button>
+                </div>
+            </div>
+
+            <div class="lobby-buttons">
+                <button type="button" class="lobby-btn" id="createTable">🃏 &nbsp;Create Table</button>
+                <button type="button" class="lobby-btn" id="activeTablesBtn">🎰 &nbsp;Active Tables</button>
+                <button type="button" class="lobby-btn" id="addContactBtn">➕ &nbsp;Add Contact</button>
+                <button type="button" class="lobby-btn" id="manageContactsBtn">👥 &nbsp;Manage Contacts</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== MDS INIT =====
+        MDS.init(function(msg) {
+            if (msg.event === 'inited') {
+                initWallet(function(user) {
+                    if (user) {
+                        window.myMaximaName = user.maximaName;
+                        window.myMaximaKey  = user.maximaPublicKey;
+                        window.myMinimaAddress    = user.minimaAddress;
+                        window.myMinimaPublicKey  = user.minimaPublicKey;
+                    }
+                    updateBalanceDisplay();
+                    lobby.init(function() {
+                        loadMyContactInSidebar();
+                        _lobbyChat.init();
+                    });
+                });
+            } else if (msg.event === 'MDSCOMMS') {
+                if (msg.data && msg.data.public === false) {
+                    try {
+                        var m = JSON.parse(msg.data.message);
+                        if (m.type) lobby.handleServiceMessage(m);
+                    } catch (e) {}
+                }
+            } else if (msg.event === 'MAXIMA') {
+                maxima.handleIncoming(msg);
+            }
+        });
+
+        // ===== BALANCE =====
+        function updateBalanceDisplay() {
+            MDS.cmd('balance', function(res) {
+                var bal = '0';
+                if (res && res.response && Array.isArray(res.response)) {
+                    for (var i = 0; i < res.response.length; i++) {
+                        if (res.response[i].tokenid === '0x00') {
+                            bal = res.response[i].sendable || '0';
+                            break;
+                        }
+                    }
+                }
+                $('#balance-amount').text(bal);
+            });
+        }
+
+        // ===== SIDEBAR =====
+        window.toggleSidebar = function(type) {
+            if (type === 'contacts') {
+                document.body.classList.toggle('sidebar-contacts-open');
+                if (document.body.classList.contains('sidebar-contacts-open')) {
+                    loadContactsList();
+                    loadMyContactInSidebar();
+                }
+            } else if (type === 'tables') {
+                document.body.classList.toggle('sidebar-tables-open');
+                if (document.body.classList.contains('sidebar-tables-open')) loadTablesList();
+            } else {
+                document.body.classList.remove('sidebar-contacts-open', 'sidebar-tables-open');
+            }
+        };
+
+        window.loadContactsList = function() {
+            var el = document.getElementById('contacts-list-sidebar');
+            if (!el) return;
+            el.innerHTML = '<div class="contacts-loading">Loading...</div>';
+            MDS.cmd('maxcontacts action:list', function(res) {
+                var contacts = (res && res.status && res.response && res.response.contacts) ? res.response.contacts : [];
+                if (contacts.length === 0) {
+                    el.innerHTML = '<div class="contacts-empty">No contacts yet.</div>';
+                    return;
+                }
+                var html = '';
+                for (var i = 0; i < contacts.length; i++) {
+                    var c = contacts[i];
+                    var extra = c.extradata || {};
+                    if (typeof extra === 'string') { try { extra = JSON.parse(extra); } catch(e) { extra = {}; } }
+                    var name = extra.name || 'noname';
+                    var addr = c.currentaddress || c.publickey || '';
+                    var short = addr.length > 30 ? addr.substring(0, 30) + '...' : addr;
+                    html += '<div class="contact-item">' +
+                        '<div class="contact-name">' + name + '</div>' +
+                        '<div class="contact-address">' + short + '</div>' +
+                        '<button class="contact-delete" onclick="deleteContact(' + c.id + ')">&times;</button>' +
+                        '</div>';
+                }
+                el.innerHTML = html;
+            });
+        };
+
+        window.loadTablesList = function(retry) {
+            retry = retry || 0;
+            var el = document.getElementById('tables-list-sidebar');
+            if (!el) return;
+            el.innerHTML = '<div class="tables-loading">Loading...</div>';
+            if (typeof lobby === 'undefined' || !lobby.getTables) {
+                if (retry < 5) setTimeout(function() { loadTablesList(retry + 1); }, 300);
+                else el.innerHTML = '<div class="tables-empty">Lobby not ready.</div>';
+                return;
+            }
+            lobby.getTables(function(tables) {
+                if (!tables || tables.length === 0) {
+                    if (retry < 3) setTimeout(function() { loadTablesList(retry + 1); }, 500);
+                    else el.innerHTML = '<div class="tables-empty">No active tables.</div>';
+                    return;
+                }
+                var items = new Array(tables.length);
+                var done = 0;
+                for (var i = 0; i < tables.length; i++) {
+                    (function(t, idx) {
+                        var tid = t.TABLEID || t.tableId;
+                        var max = t.MAXPLAYERS || t.maxPlayers || '4';
+                        var blinds = t.BLINDS || t.blinds || '10/20';
+                        var buyIn = t.BUYIN || t.buyIn || '1000';
+                        var creator = t.CREATORNAME || t.creatorName || '';
+                        var creatorKey = t.CREATOR || t.creator || '';
+                        var title = creator ? creator + "'s Table" : 'Table ' + (tid ? tid.substring(0, 8) : '?');
+                        var isOwn = (creatorKey === window.myMaximaKey);
+                        sql.getPlayers(tid, function(players) {
+                            items[idx] = {
+                                tid: tid,
+                                isOwn: isOwn,
+                                html: '<div class="table-item table-item-clickable" data-tableid="' + (tid || '') + '">' +
+                                    '<div class="table-name">' + title + '</div>' +
+                                    '<div class="table-details"><span>👥 ' + (players ? players.length : 1) + '/' + max + '</span><span>💰 ' + blinds + '</span><span>🪙 ' + buyIn + '</span></div>' +
+                                    '</div>'
+                            };
+                            if (++done === tables.length) {
+                                el.innerHTML = '';
+                                for (var k = 0; k < items.length; k++) {
+                                    if (!items[k]) continue;
+                                    var wrapper = document.createElement('div');
+                                    wrapper.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:8px;';
+                                    var tableEl = document.createElement('div');
+                                    tableEl.innerHTML = items[k].html;
+                                    var node = tableEl.firstChild;
+                                    node.style.flex = '1';
+                                    (function(id) {
+                                        node.onclick = function() { lobby.joinTable(id); };
+                                    })(items[k].tid);
+                                    wrapper.appendChild(node);
+                                    if (items[k].isOwn) {
+                                        var delBtn = document.createElement('button');
+                                        delBtn.className = 'table-delete-btn';
+                                        delBtn.title = 'Delete table';
+                                        delBtn.innerHTML = '🗑';
+                                        (function(id) {
+                                            delBtn.onclick = function() {
+                                                pokerModal.confirm('Delete this table?', function(ok) {
+                                                    if (!ok) return;
+                                                    sql.deleteTable(id, function() {
+                                                        MDS.cmd('maxcontacts action:list', function(res) {
+                                                            var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+                                                            var msg = { type: 'TABLE_DELETE', tableId: id };
+                                                            for (var c = 0; c < contacts.length; c++) {
+                                                                var key = contacts[c].publickey || '';
+                                                                if (key) maxima.sendWithAck(key, msg, function() {});
+                                                            }
+                                                        });
+                                                        loadTablesList();
+                                                        if (typeof lobby !== 'undefined') lobby.loadTables();
+                                                    });
+                                                });
+                                            };
+                                        })(items[k].tid);
+                                        wrapper.appendChild(delBtn);
+                                    }
+                                    el.appendChild(wrapper);
+                                }
+                            }
+                        });
+                    })(tables[i], i);
+                }
+            });
+        };
+
+        window.loadMyContactInSidebar = function() {
+            var el = document.getElementById('sidebar-contact-text');
+            if (!el) return;
+            MDS.cmd('maxima action:info', function(res) {
+                var addr = (res && res.status && res.response && res.response.contact) ? res.response.contact : '';
+                el.textContent = addr || 'Failed to load';
+            });
+        };
+
+        window.copySidebarContact = function() {
+            var text = document.getElementById('sidebar-contact-text').textContent;
+            if (!text || text === 'Loading...' || text === 'Failed to load') return;
+            var tmp = document.createElement('input');
+            tmp.value = text;
+            document.body.appendChild(tmp);
+            tmp.select();
+            document.execCommand('copy');
+            document.body.removeChild(tmp);
+            pokerModal.alert('Contact copied!', 'success');
+        };
+
+        window.deleteContact = function(id) {
+            pokerModal.confirm('Delete this contact?', function(ok) {
+                if (!ok) return;
+                MDS.cmd('maxcontacts action:remove id:' + id, function(res) {
+                    if (res && res.status) loadContactsList();
+                    else pokerModal.alert('Failed to delete contact', 'error');
+                });
+            });
+        };
+
+        // ===== LOBBY CHAT =====
+        var _lobbyChat = window._lobbyChat = {
+            _msgs: [],
+            init: function() {
+                $('#lobby-chat-send').click(function() { _lobbyChat.send(); });
+                $('#lobby-chat-input').keydown(function(e) { if (e.keyCode === 13) _lobbyChat.send(); });
+            },
+            send: function() {
+                var input = document.getElementById('lobby-chat-input');
+                var text = input.value.replace(/^\s+|\s+$/g, '');
+                if (!text) return;
+                input.value = '';
+                var msg = { type: 'LOBBY_CHAT', sender: window.myMaximaKey, senderName: window.myMaximaName || 'Me', text: text, timestamp: Date.now() };
+                _lobbyChat._add(msg, true);
+                MDS.cmd('maxcontacts action:list', function(res) {
+                    var contacts = (res && res.response && res.response.contacts) ? res.response.contacts : [];
+                    for (var i = 0; i < contacts.length; i++) {
+                        var key = contacts[i].publickey || '';
+                        if (key) maxima.sendWithAck(key, msg, function() {});
+                    }
+                });
+            },
+            receive: function(msg) {
+                if (msg.sender === window.myMaximaKey) return;
+                _lobbyChat._add(msg, false);
+            },
+            _add: function(msg, isOwn) {
+                this._msgs.push(msg);
+                if (this._msgs.length > 100) this._msgs.shift();
+                var container = document.getElementById('lobby-chat-messages');
+                if (!container) return;
+                var t = new Date(msg.timestamp);
+                var ts = (t.getHours() < 10 ? '0' : '') + t.getHours() + ':' + (t.getMinutes() < 10 ? '0' : '') + t.getMinutes();
+                var div = document.createElement('div');
+                div.className = 'chat-msg' + (isOwn ? ' chat-msg-own' : '');
+                var name = document.createElement('span');
+                name.className = 'chat-msg-name';
+                name.textContent = isOwn ? 'You' : (msg.senderName || 'Player');
+                var time = document.createElement('span');
+                time.className = 'chat-msg-time';
+                time.textContent = ts;
+                var text = document.createElement('div');
+                text.className = 'chat-msg-text';
+                text.textContent = msg.text;
+                div.appendChild(name);
+                div.appendChild(time);
+                div.appendChild(text);
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+            }
+        };
+
+        // ===== JQUERY READY =====
+        $(document).ready(function() {
+            $('#createTable').button().click(function() {
+                if (typeof lobby !== 'undefined' && lobby.createTable) lobby.createTable();
+                else pokerModal.alert('Lobby not ready. Please wait...', 'error');
+            });
+
+            $('#addContactBtn').button().click(function() {
+                pokerModal.prompt('Paste contact address (e.g. MxG18H...@host:port)', '', function(contact) {
+                    if (!contact) return;
+                    var clean = contact.replace(/^\s+|\s+$/g, '');
+                    var m = clean.match(/((?:Mx[A-Za-z0-9]+|0x[0-9a-fA-F]+|MAX#[A-Za-z0-9]+)@[^\s]+)/);
+                    if (m) clean = m[1];
+                    MDS.cmd('maxcontacts action:add contact:' + clean, function(res) {
+                        if (res && res.status) {
+                            var delivered = !(res.response && res.response.maxima && res.response.maxima.delivered === false);
+                            if (delivered) pokerModal.alert('Contact request sent!', 'success');
+                            else pokerModal.alert('Contact request failed: ' + ((res.response && res.response.maxima && res.response.maxima.error) || 'Could not reach contact'), 'error');
+                            setTimeout(loadContactsList, 1500);
+                        } else {
+                            pokerModal.alert('Failed to add contact: ' + (res && res.error ? res.error : ''), 'error');
+                        }
+                    });
+                });
+            });
+
+            $('#manageContactsBtn').button().click(function() { toggleSidebar('contacts'); });
+            $('#activeTablesBtn').button().click(function() { toggleSidebar('tables'); });
+        });
+    </script>
+</body>
+</html>

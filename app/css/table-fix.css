@@ -68,7 +68,7 @@ body {
 .poker-table {
     position: relative;
     width: min(92vw, 1100px);
-    height: min(78vh, 650px);
+    height: min(calc(100vh - 80px), 650px);
     background: #2a5a3a;
     border-radius: 50%;
     box-shadow: 0 20px 40px rgba(0,0,0,0.6), inset 0 0 40px rgba(212, 175, 55, 0.25);
@@ -169,13 +169,13 @@ body {
     background: white;
     border-radius: 5px;
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 2px 3px;
     font-weight: bold;
-    font-size: 0.85rem;
     box-shadow: 0 2px 4px rgba(0,0,0,0.3);
     color: #000;
-    /* disable hover 3d from style.css */
     transform: none;
     transition: none;
 }
@@ -186,6 +186,18 @@ body {
 }
 
 .seat .card.red { color: #c0392b; }
+
+.seat .card .card-rank {
+    font-size: 0.7rem;
+    font-weight: bold;
+    line-height: 1;
+}
+
+.seat .card .card-suit {
+    font-size: 0.85rem;
+    line-height: 1;
+    align-self: flex-end;
+}
 
 /* ===== TURN TIMER ===== */
 .turn-timer {
@@ -226,16 +238,19 @@ body {
     background: white;
     border-radius: 6px;
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 3px 4px;
     font-weight: bold;
-    font-size: 1.1rem;
     box-shadow: 0 3px 6px rgba(0,0,0,0.4);
     color: #000;
     transition: transform 0.2s;
     transform: none;
 }
 
+.community-cards .card .card-rank { font-size: 0.9rem; font-weight: bold; line-height: 1; }
+.community-cards .card .card-suit { font-size: 1.1rem; line-height: 1; align-self: flex-end; }
 .community-cards .card:hover { transform: translateY(-3px); }
 .community-cards .card.red { color: #c0392b; }
 
@@ -350,8 +365,9 @@ body {
 /* ===== CHANNEL STATUS ===== */
 #channel-status {
     position: absolute;
-    top: 10px;
-    left: 50px;
+    top: 45px;
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 30;
     background: rgba(0,0,0,0.75);
     padding: 8px 14px;
@@ -450,7 +466,7 @@ body {
 @media (max-width: 768px) {
     .poker-table {
         width: 96vw;
-        height: 70vh;
+        height: min(calc(100vh - 75px), 500px);
         border-width: 6px;
     }
 
@@ -470,10 +486,14 @@ body {
     .seat .name  { font-size: 0.7rem; }
     .seat .stack { font-size: 0.75rem; padding: 1px 4px; }
     .seat .cards { gap: 3px; margin: 3px 0; min-height: 30px; }
-    .seat .card  { width: 24px; height: 34px; font-size: 0.7rem; border-radius: 3px; }
+    .seat .card  { width: 24px; height: 34px; border-radius: 3px; }
+    .seat .card .card-rank { font-size: 0.6rem; }
+    .seat .card .card-suit { font-size: 0.7rem; }
 
     .community-cards { gap: 5px; padding: 6px 12px; }
-    .community-cards .card { width: 36px; height: 50px; font-size: 0.95rem; }
+    .community-cards .card { width: 36px; height: 50px; }
+    .community-cards .card .card-rank { font-size: 0.75rem; }
+    .community-cards .card .card-suit { font-size: 0.9rem; }
 
     .pot { font-size: 1rem; padding: 6px 14px; }
 
@@ -498,21 +518,13 @@ body {
         left: 20px;
     }
 
-    #help-button {
-        bottom: 20px !important;
-        right: 20px !important;
-        width: 50px !important;
-        height: 50px !important;
-        font-size: 25px !important;
-    }
-
     #phase-controls, #channel-status {
         font-size: 0.75rem;
         padding: 5px 10px;
         max-width: 180px;
     }
 
-    #channel-status { left: 45px; top: 8px; }
+    #channel-status { bottom: auto; top: 40px; left: 50%; transform: translateX(-50%); }
     #status { font-size: 0.75rem; bottom: 62px; }
 }
 
@@ -578,7 +590,7 @@ body {
         border-radius: 16px;
     }
 
-    .back-button, #help-button {
+    .back-button {
         width: 40px !important;
         height: 40px !important;
         font-size: 18px !important;
@@ -586,9 +598,58 @@ body {
     }
 
     .back-button { left: 8px; }
-    #help-button { right: 8px !important; }
 
     #phase-controls { top: 4px; right: 4px; font-size: 0.7rem; padding: 4px 8px; }
-    #channel-status { top: 4px; left: 36px; font-size: 0.7rem; padding: 4px 8px; }
+    #channel-status { bottom: auto; top: 36px; left: 50%; transform: translateX(-50%); font-size: 0.7rem; padding: 4px 8px; }
     #status { bottom: 52px; font-size: 0.7rem; }
+}
+
+/* Card back (face-down for opponents) */
+.seat .card.card-back {
+    background: repeating-linear-gradient(
+        45deg,
+        #1a3a6b,
+        #1a3a6b 4px,
+        #0d2244 4px,
+        #0d2244 8px
+    );
+    border: 1px solid #4a7abf;
+}
+
+/* ===== TABLE TOP BAR ===== */
+.table-topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.7);
+    border-bottom: 1px solid rgba(212,175,55,0.3);
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
+
+.topbar-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(212,175,55,0.5);
+    background: rgba(212,175,55,0.1);
+    color: #d4af37;
+    font-size: 1.1rem;
+    font-weight: bold;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+}
+.topbar-btn:hover { background: rgba(212,175,55,0.25); }
+
+.topbar-channel {
+    flex: 1;
+    font-size: 0.82rem;
+    text-align: center;
+    color: #c0b090;
 }

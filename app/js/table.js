@@ -18,8 +18,8 @@ var tableUI = {
     _turnTimer:      null,
     _phaseTimer:     null,
     _disputePoller:  null,
-    TURN_TIMEOUT:    30000,
-    PHASE_TIMEOUT:   20000,
+    TURN_TIMEOUT:    60000,
+    PHASE_TIMEOUT:   40000,
 
     init: function(tableId) {
         this.tableId = tableId;
@@ -35,10 +35,14 @@ var tableUI = {
         sql.getChannelByTable(this.tableId, function(ch) {
             self.channelInfo = ch;
             self.renderChannelStatus();
-            // Auto-start game when channel just became OPEN (enforcer only)
             var newStatus = ch ? (ch.status || ch.STATUS) : null;
             if (newStatus === 'OPEN' && prevStatus !== 'OPEN' && self._isEnforcer()) {
                 self._autoStartGame();
+            }
+            // Restore dispute poller if channel is in DISPUTE state
+            if (newStatus === 'DISPUTE' && !self._disputePoller && ch) {
+                var chan = channel.fromRow(ch);
+                if (chan) self._startDisputePoller(chan);
             }
         });
     },
@@ -48,7 +52,12 @@ var tableUI = {
         var oldState = this.gameState;
 
         sql.getGameState(this.tableId, function(state) {
-            if (!state) { self.renderWaiting(); return; }
+            if (!state) {
+                // No game yet — render seats (players may already be loaded)
+                self._markDirty('seats');
+                self.scheduleUpdate();
+                return;
+            }
             self.gameState = state;
 
             if (oldState) {
@@ -63,17 +72,47 @@ var tableUI = {
                 self._markDirty('all');
             }
 
-            // Generate commit secret if needed
-            if (state.round === 'commit' && !self.mySecret && self.myPlayerIndex !== -1) {
-                self.mySecret = utils.genRandomHexString(64);
-                if (window.cryptoUtils && window.cryptoUtils.commit) {
-                    window.cryptoUtils.commit(self.mySecret, '', function(err, hash) {
-                        if (!err && hash) { self.myCommitHash = hash; self._markDirty('phase'); self.scheduleUpdate(); }
-                    });
-                } else {
-                    self.myCommitHash = btoa(self.mySecret);
+            // Generate commit secret and auto-send
+            if (state.round === 'commit') {
+                // Reset on new commit phase
+                if (!oldState || oldState.round !== 'commit') {
+                    self.mySecret = null;
+                    self.myCommitHash = null;
+                    self._revealSent = false;
+                }
+                if (!self.mySecret && self.myPlayerIndex !== -1) {
+                    self.mySecret = utils.genRandomHexString(64);
+                    if (window.cryptoUtils && window.cryptoUtils.commit) {
+                        window.cryptoUtils.commit(self.mySecret, '', function(err, hash) {
+                            if (!err && hash) { self.myCommitHash = hash; self.sendCommit(); }
+                        });
+                    } else {
+                        self.myCommitHash = btoa(self.mySecret);
+                        self.sendCommit();
+                    }
                 }
             }
+            // Auto-send reveal when round changes to reveal
+            if (state.round === 'reveal' && self.mySecret && !self._revealSent) {
+                self._revealSent = true;
+                self.sendReveal();
+            }
+            if (state.round !== 'reveal') { self._revealSent = false; }
+
+            // Show winner and auto-start next hand
+            if (state.round === 'finished' && (!oldState || oldState.round !== 'finished') && !self._nextHandScheduled) {
+                self._nextHandScheduled = true;
+                self._markDirty('phase');
+                if (self._isEnforcer()) {
+                    setTimeout(function() {
+                        self._nextHandScheduled = false;
+                        self.mySecret = null;
+                        self.myCommitHash = null;
+                        self._autoStartGame();
+                    }, 4000);
+                }
+            }
+            if (state.round === 'commit') { self._nextHandScheduled = false; }
 
             // Start timeout timers (host enforces)
             var prevRound = oldState ? oldState.round : null;
@@ -98,7 +137,8 @@ var tableUI = {
             for (var i = 0; i < players.length; i++) {
                 if (players[i].playerPubKey === window.myMaximaKey) { self.myPlayerIndex = i; break; }
             }
-            if (oldCount !== players.length) { self._positionCache = null; self._markDirty('seats'); }
+            self._positionCache = null;
+            self._markDirty('seats');
             self.scheduleUpdate();
         });
     },
@@ -133,18 +173,46 @@ var tableUI = {
         if (!this.gameState) return;
         var html = '';
         if (this.gameState.round === 'commit') {
-            html = this.myCommitHash
-                ? '<div class="phase-controls"><p>Commit phase.</p><button id="commitBtn" class="primary">Send Commit</button></div>'
-                : '<div class="phase-controls"><p>Generating commitment...</p></div>';
+            html = '<div class="phase-controls"><p>Shuffling deck... (' +
+                (this.myCommitHash ? 'committed' : 'generating...') + ')</p></div>';
         } else if (this.gameState.round === 'reveal') {
-            html = (this.gameState.reveals && this.gameState.reveals[window.myMaximaKey])
-                ? '<div class="phase-controls"><p>Reveal sent. Waiting...</p></div>'
-                : '<div class="phase-controls"><p>Reveal phase.</p><button id="revealBtn" class="primary">Send Reveal</button></div>';
+            html = '<div class="phase-controls"><p>Revealing secrets... (' +
+                (this._revealSent ? 'revealed' : 'sending...') + ')</p></div>';
+        } else if (this.gameState.round === 'finished') {
+            var winners = [];
+            try { winners = JSON.parse(this.gameState.lastaction || this.gameState.lastAction || '[]'); } catch(e) {}
+            var winText = '';
+            if (Array.isArray(winners) && winners.length > 0) {
+                for (var wi = 0; wi < winners.length; wi++) {
+                    var wn = winners[wi];
+                    var name = wn.name || (wn.pubKey ? wn.pubKey.substring(0, 8) + '...' : '?');
+                    winText += name + ' wins ' + wn.amount + ' (' + wn.desc + ') ';
+                }
+            } else {
+                winText = 'Hand finished';
+            }
+            // Check if any player is bust (stack <= big blind)
+            var bb = this.channelInfo ? parseInt((this.channelInfo.blinds || '10/20').split('/')[1] || 20) : 20;
+            var bustPlayer = null;
+            if (this.channelInfo && this.channelInfo.balances) {
+                for (var bi = 0; bi < (this.players || []).length; bi++) {
+                    var pk = this.players[bi].playerPubKey;
+                    if (parseInt(this.channelInfo.balances[pk] || 0) <= bb) {
+                        bustPlayer = this.players[bi].playerName || pk.substring(0,8) + '...';
+                        break;
+                    }
+                }
+            }
+            var nextLine = bustPlayer
+                ? '<p style="color:#f39c12">⚠️ ' + bustPlayer + ' is out of chips!</p><button id="closeChannelBtn" class="primary" style="margin-top:6px">Close Channel</button>'
+                : '<p style="font-size:0.8em;opacity:0.7">Next hand starting...</p>';
+            html = '<div class="phase-controls"><p>🏆 ' + winText.trim() + '</p>' + nextLine + '</div>';
         }
         if (html) {
             $('#phase-controls').html(html);
             $('#commitBtn').click(function() { tableUI.sendCommit(); });
             $('#revealBtn').click(function() { tableUI.sendReveal(); });
+            $('#closeChannelBtn').click(function() { tableUI.closeChannelCooperative(); });
         }
     },
 
@@ -152,22 +220,35 @@ var tableUI = {
         var html;
         if (this.channelInfo) {
             var s = this.channelInfo.status || 'FUNDING';
-            var color = s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : 'red');
-            html = '<strong>Channel:</strong> <span style="color:' + color + ';">' + s + '</span>' +
-                (s === 'OPEN' || s === 'DISPUTE' ? ' <button id="disputeBtn" class="danger">Dispute</button>' : '');
+            var color = s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : (s === 'CLOSED' ? 'gray' : 'red'));
+            html = '<strong>Channel:</strong> <span style="color:' + color + ';">' + s + '</span>';
+            if (s === 'OPEN') {
+                html += ' <button id="closeChannelBtn2" class="primary" style="font-size:0.75rem;padding:3px 10px">Close Channel</button>';
+            }
         } else {
             html = '<button id="createChannelBtn" class="primary">Create Channel</button>';
         }
         var el = document.getElementById('channel-status');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'channel-status';
-            var game = document.getElementById('game');
-            if (game) game.parentNode.insertBefore(el, game);
-        }
+        if (!el) return;
         el.innerHTML = html;
         $('#createChannelBtn').click(function() { tableUI.createChannel(); });
-        $('#disputeBtn').click(function() { tableUI.startDispute(); });
+        $('#closeChannelBtn2').click(function() { tableUI.showCloseChannelDialog(); });
+    },
+
+    showCloseChannelDialog: function() {
+        var self = this;
+        pokerModal.choice(
+            'Close Channel',
+            'How do you want to close the channel?',
+            [
+                { label: 'Cooperative (instant)', value: 'coop' },
+                { label: 'Dispute (on-chain, ~30 min)', value: 'dispute' }
+            ],
+            function(choice) {
+                if (choice === 'coop') self.closeChannelCooperative();
+                else if (choice === 'dispute') self.startDispute();
+            }
+        );
     },
 
     createChannel: function() {
@@ -192,21 +273,25 @@ var tableUI = {
             }
             var participants = [];
             for (var i = 0; i < self.players.length; i++) {
-                participants.push({ pubKey: self.players[i].playerPubKey, address: self.players[i].address, amount: buyIn });
+                participants.push({ pubKey: self.players[i].playerPubKey, walletKey: self.players[i].walletKey || '', address: self.players[i].address, amount: buyIn });
             }
             var chan = new channel.Channel(self.tableId, participants, '0x00', 30);
             chan.status = 'FUNDING';
-            sql.insertChannelFull(chan, function(res) {
-                if (!res || !res.status) { pokerModal.alert('Failed to save channel to database', 'error'); return; }
-                var msg = { type: 'REQUEST_NEW_CHANNEL', channelId: chan.id, tableId: self.tableId, participants: participants, tokenId: '0x00', timeout: 30 };
-                for (var j = 0; j < self.players.length; j++) {
-                    (function(p) {
-                        if (p.playerPubKey !== window.myMaximaKey) maxima.sendWithAck(p.playerPubKey, msg, function() {});
-                    })(self.players[j]);
-                }
-                channel.set(chan.id, chan);
-                pokerModal.alert('Channel creation request sent', 'success');
-                self.loadChannelInfo();
+            pokerModal.alert('Initializing channel scripts...', 'info');
+            chan.init(function(err) {
+                if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
+                sql.insertChannelFull(chan, function(res) {
+                    if (!res || !res.status) { pokerModal.alert('Failed to save channel to database', 'error'); return; }
+                    var msg = { type: 'REQUEST_NEW_CHANNEL', channelId: chan.id, tableId: self.tableId, participants: participants, tokenId: '0x00', timeout: 30 };
+                    for (var j = 0; j < self.players.length; j++) {
+                        (function(p) {
+                            if (p.playerPubKey !== window.myMaximaKey) maxima.sendRaw(p.playerPubKey, msg, function() {});
+                        })(self.players[j]);
+                    }
+                    channel.set(chan.id, chan);
+                    pokerModal.alert('Channel request sent, waiting for acceptance...', 'success');
+                    self.loadChannelInfo();
+                });
             });
         });
     },
@@ -229,13 +314,16 @@ var tableUI = {
                     initialStack: buyIn
                 });
             }
-            self._sendToAllPlayers({
+            var gameMsg = {
                 type: 'GAME_START',
                 tableId: self.tableId,
                 channelId: self.channelInfo.hashId || self.channelInfo.HASHID,
                 players: playersWithStack,
-                blinds: { small: parseInt(parts[0]), big: parseInt(parts[1]) }
-            }, function(ok) {
+                blinds: { small: parts[0], big: parts[1] }
+            };
+            // Send to service (enforcer's own node) via comms
+            MDS.comms.solo(JSON.stringify(gameMsg));
+            self._sendToAllPlayers(gameMsg, function(ok) {
                 if (!ok) MDS.log('Auto-start game failed, will retry on next channel update');
             });
         });
@@ -251,6 +339,7 @@ var tableUI = {
 
     renderSeats: function() {
         if (!this.players) return;
+        if (this.players.length === 0) { $('#seats').html('<div class="loading">Waiting for players to join...</div>'); return; }
         var seatsEl = $('#seats');
         seatsEl.removeClass('seats-2 seats-4');
         var n = this.players.length;
@@ -258,57 +347,92 @@ var tableUI = {
         else seatsEl.addClass('seats-4');
 
         var positions = this.calculatePositions(n);
+
+        // Derive own cards from seed (never stored in DB)
+        var myCards = [];
+        var state = this.gameState;
+        if (state && state.reveals && state.round !== 'commit' && state.round !== 'reveal' && state.round !== 'waiting') {
+            var seeds = [];
+            for (var rk in state.reveals) { if (state.reveals.hasOwnProperty(rk)) seeds.push(state.reveals[rk]); }
+            if (seeds.length > 0 && this.myPlayerIndex >= 0) {
+                try {
+                    var combinedSeed = cryptoUtils.combineSeeds(seeds);
+                    var deck = cryptoUtils.generateDeck();
+                    var shuffled = cryptoUtils.seededShuffle(deck, combinedSeed);
+                    myCards = [shuffled[this.myPlayerIndex * 2], shuffled[this.myPlayerIndex * 2 + 1]];
+                } catch(e) {}
+            }
+        }
+
         var html = '';
         for (var i = 0; i < n; i++) {
             var p = this.players[i];
             var pos = positions[i];
             var isMe = (i === this.myPlayerIndex);
-            var stack = (this.channelInfo && this.channelInfo.balances) ? (this.channelInfo.balances[p.playerPubKey] || '0') : '?';
+            var stack;
+            if (this.channelInfo && this.channelInfo.balances && this.channelInfo.balances[p.playerPubKey]) {
+                stack = this.channelInfo.balances[p.playerPubKey];
+            } else {
+                stack = '?';
+            }
 
-            var playerGame = null;
-            if (this.gameState && this.gameState.playerCards) {
-                for (var pc = 0; pc < this.gameState.playerCards.length; pc++) {
-                    if (this.gameState.playerCards[pc].pubKey === p.playerPubKey) { playerGame = this.gameState.playerCards[pc]; break; }
+            // Determine card count for this player from playerCards metadata
+            var cardCount = 0;
+            if (state && state.playerCards) {
+                for (var pc = 0; pc < state.playerCards.length; pc++) {
+                    if (state.playerCards[pc].pubKey === p.playerPubKey) {
+                        cardCount = state.playerCards[pc].cardCount || (state.playerCards[pc].cards ? state.playerCards[pc].cards.length : 0);
+                        break;
+                    }
                 }
             }
-            var cards = playerGame ? playerGame.cards : [];
-            var bet   = playerGame ? playerGame.bet   : 0;
+
+            var bets  = (state && state.bets) ? (typeof state.bets === 'string' ? JSON.parse(state.bets) : state.bets) : {};
+            var bet   = bets[p.playerPubKey] || 0;
 
             var posClass = '';
-            var posTip   = '';
-            if (this.gameState) {
-                if (this.gameState.button     === i) { posClass = ' button-seat';      posTip = ' data-tooltip="Dealer button"'; }
-                else if (this.gameState.smallBlind === i) { posClass = ' small-blind-seat'; posTip = ' data-tooltip="Small Blind"'; }
-                else if (this.gameState.bigBlind   === i) { posClass = ' big-blind-seat';   posTip = ' data-tooltip="Big Blind"'; }
+            if (state) {
+                if (state.button     === i) posClass = ' button-seat';
+                else if (state.smallBlind === i) posClass = ' small-blind-seat';
+                else if (state.bigBlind   === i) posClass = ' big-blind-seat';
             }
-            var turnClass = (this.gameState && this.gameState.turn === i) ? ' current-turn' : '';
+            var turnClass = (state && parseInt(state.turn) === i) ? ' current-turn' : '';
 
             var cardsHtml = '';
-            for (var ci = 0; ci < cards.length; ci++) {
-                var c = cards[ci];
-                var cls = 'card' + (c.indexOf('h') !== -1 || c.indexOf('d') !== -1 ? ' red' : '');
-                var suit = c.length > 1 ? c[1] : '';
-                cardsHtml += '<div class="' + cls + '" data-suit="' + suit + '" style="animation-delay:' + (ci * 0.1) + 's">' + c + '</div>';
+            if (isMe && myCards.length > 0) {
+                for (var ci = 0; ci < myCards.length; ci++) {
+                    var c = myCards[ci];
+                    var isRed = c.indexOf('h') !== -1 || c.indexOf('d') !== -1;
+                    var suitChar = {'h':'♥','d':'♦','c':'♣','s':'♠'}[c[c.length-1]] || c[c.length-1];
+                    var rank = c.slice(0, c.length - 1);
+                    cardsHtml += '<div class="card' + (isRed ? ' red' : '') + '" data-suit="' + suitChar + '">' +
+                        '<span class="card-rank">' + rank + '</span>' +
+                        '<span class="card-suit">' + suitChar + '</span>' +
+                        '</div>';
+                }
+            } else if (!isMe && cardCount > 0) {
+                for (var ci2 = 0; ci2 < cardCount; ci2++) {
+                    cardsHtml += '<div class="card card-back"></div>';
+                }
             }
 
-            html += '<div class="seat' + posClass + turnClass + '" data-pubkey="' + p.playerPubKey + '" style="top:' + pos.top + '%;left:' + pos.left + '%;"' + posTip + '>' +
+            html += '<div class="seat' + posClass + turnClass + '" data-pubkey="' + p.playerPubKey + '" style="top:' + pos.top + '%;left:' + pos.left + '%;">' +
                 '<div class="name">' + p.playerName + (isMe ? ' (you)' : '') + '</div>' +
                 '<div class="stack">' + stack + '</div>' +
                 '<div class="cards">' + cardsHtml + '</div>' +
                 '<div>Bet: ' + bet + '</div>';
-            if (this.gameState && this.gameState.turn === i) {
+            if (state && parseInt(state.turn) === i) {
                 html += '<div class="turn-timer"><div class="turn-timer-bar"></div></div>';
             }
             html += '</div>';
         }
         seatsEl.html(html);
 
-        // Animate turn timer
-        if (this.gameState && this.gameState.turn === this.myPlayerIndex) {
+        if (state && parseInt(state.turn) === this.myPlayerIndex) {
             var bar = $('.current-turn .turn-timer-bar');
             if (bar.length) {
                 bar.css({ width: '0%', transition: 'none' });
-                setTimeout(function() { bar.css({ width: '100%', transition: 'width 30s linear' }); }, 50);
+                setTimeout(function() { bar.css({ width: '100%', transition: 'width 60s linear' }); }, 50);
             }
         }
     },
@@ -318,9 +442,13 @@ var tableUI = {
         var html = '';
         for (var i = 0; i < this.gameState.communityCards.length; i++) {
             var c = this.gameState.communityCards[i];
-            var cls = 'card' + (c.indexOf('h') !== -1 || c.indexOf('d') !== -1 ? ' red' : '');
-            var suit = c.length > 1 ? c[1] : '';
-            html += '<div class="' + cls + '" data-suit="' + suit + '" style="animation-delay:' + (i * 0.1) + 's">' + c + '</div>';
+            var isRed = c.indexOf('h') !== -1 || c.indexOf('d') !== -1;
+            var suitChar = c.length > 1 ? {'h':'♥','d':'♦','c':'♣','s':'♠'}[c[c.length-1]] || c[c.length-1] : '';
+            var rank = c.length > 1 ? c.slice(0, c.length-1) : c;
+            html += '<div class="card' + (isRed ? ' red' : '') + '" data-suit="' + suitChar + '">' +
+                '<span class="card-rank">' + rank + '</span>' +
+                '<span class="card-suit">' + suitChar + '</span>' +
+                '</div>';
         }
         $('#community').html(html);
     },
@@ -330,16 +458,19 @@ var tableUI = {
     },
 
     calculatePositions: function(n) {
-        if (this._positionCache && this._lastPlayerCount === n) return this._positionCache;
-        var positions = [];
+        var myIdx = this.myPlayerIndex < 0 ? 0 : this.myPlayerIndex;
+        var cacheKey = n + '_' + myIdx;
+        if (this._positionCache && this._lastPlayerCount === cacheKey) return this._positionCache;
+        var positions = new Array(n);
         var step  = (2 * Math.PI) / n;
-        var angle = Math.PI / 2;
+        // myIdx always at bottom (angle = -π/2 = 270°)
+        var baseAngle = -Math.PI / 2;
         for (var i = 0; i < n; i++) {
-            positions.push({ top: 50 + 35 * Math.sin(angle), left: 50 + 38 * Math.cos(angle) });
-            angle -= step;
+            var angle = baseAngle + step * ((i - myIdx + n) % n);
+            positions[i] = { top: 50 + 38 * Math.sin(angle), left: 50 + 42 * Math.cos(angle) };
         }
-        this._positionCache  = positions;
-        this._lastPlayerCount = n;
+        this._positionCache   = positions;
+        this._lastPlayerCount = cacheKey;
         return positions;
     },
 
@@ -428,6 +559,25 @@ var tableUI = {
 
     // ---- Dispute & claim ----
 
+    closeChannelCooperative: function() {
+        if (!this.channelInfo) { pokerModal.alert('No channel to close', 'error'); return; }
+        var self = this;
+        pokerModal.confirm('Close channel and withdraw funds?', function(ok) {
+            if (!ok) return;
+            sql.getChannelByTable(self.tableId, function(row) {
+                if (!row) { pokerModal.alert('Channel not found', 'error'); return; }
+                var chan = channel.fromRow(row);
+                if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
+                chan.closeCooperative(function(err, txid) {
+                    if (err) { pokerModal.alert('Close failed: ' + err, 'error'); return; }
+                    pokerModal.alert('Channel closed. Funds returned to wallets.', 'success');
+                    self._clearTimers();
+                    self.loadChannelInfo();
+                });
+            });
+        });
+    },
+
     startDispute: function() {
         if (!this.channelInfo) { pokerModal.alert('No channel to dispute', 'error'); return; }
         var self = this;
@@ -441,6 +591,8 @@ var tableUI = {
                 self._clearTimers();
                 self.loadChannelInfo();
                 self._startDisputePoller(chan);
+                // Notify other players
+                self._sendToAllPlayers({ type: 'DISPUTE_NOTIFY', tableId: self.tableId, channelId: chan.id }, function() {});
             });
         });
     },
@@ -492,12 +644,19 @@ var tableUI = {
     },
 
     updateControls: function() {
-        var isMyTurn   = this.gameState && this.gameState.turn === this.myPlayerIndex;
-        var currentBet = this.gameState ? (this.gameState.currentBet || 0) : 0;
+        var isMyTurn   = this.gameState && parseInt(this.gameState.turn) === this.myPlayerIndex;
+        var currentBet = this.gameState ? parseInt(this.gameState.currentbet || this.gameState.currentBet || 0) : 0;
+        var myBet = 0;
+        if (isMyTurn && this.gameState && this.players && this.players[this.myPlayerIndex]) {
+            var bets = this.gameState.bets || {};
+            if (typeof bets === 'string') { try { bets = JSON.parse(bets); } catch(e) { bets = {}; } }
+            myBet = parseInt(bets[this.players[this.myPlayerIndex].playerPubKey] || 0);
+        }
+        var needToCall = currentBet > myBet;
         $('#foldBtn').prop('disabled', !isMyTurn);
-        $('#callBtn').prop('disabled', !(isMyTurn && currentBet > 0));
+        $('#callBtn').prop('disabled', !(isMyTurn && needToCall));
         $('#raiseBtn').prop('disabled', !isMyTurn);
-        $('#checkBtn').prop('disabled', !(isMyTurn && currentBet === 0));
+        $('#checkBtn').prop('disabled', !(isMyTurn && !needToCall));
     },
 
     setupEventListeners: function() {
@@ -514,18 +673,19 @@ var tableUI = {
     sendAction: function(action, amount) {
         if (!this.tableId) return;
         var self = this;
-        this._sendToAllPlayers({
-            type: 'BET', tableId: this.tableId,
-            player: window.myMaximaKey, action: action, amount: amount || '0'
-        }, function(ok) {
-            if (ok) { if (self.gameState) self.gameState.lastAction = action; self.updateControls(); }
-            else pokerModal.alert('Failed to send action', 'error');
+        var msg = { type: 'BET', tableId: this.tableId, player: window.myMaximaKey, action: action, amount: amount || '0' };
+        MDS.comms.solo(JSON.stringify(msg));
+        this._sendToAllPlayers(msg, function(ok) {
+            if (!ok) pokerModal.alert('Failed to send action', 'error');
         });
     },
 
     sendCommit: function() {
         if (!this.myCommitHash) { pokerModal.alert('Commit hash not ready', 'error'); return; }
-        this._sendToAllPlayers({ type: 'COMMIT', tableId: this.tableId, playerPubKey: window.myMaximaKey, commitHash: this.myCommitHash }, function(ok) {
+        if (!this.players || this.players.length === 0) { pokerModal.alert('Players not loaded', 'error'); return; }
+        var msg = { type: 'COMMIT', tableId: this.tableId, playerPubKey: window.myMaximaKey, commitHash: this.myCommitHash };
+        MDS.comms.solo(JSON.stringify(msg));
+        this._sendToAllPlayers(msg, function(ok) {
             if (ok) $('#commitBtn').prop('disabled', true).text('Commit sent');
             else pokerModal.alert('Failed to send commit', 'error');
         });
@@ -533,7 +693,9 @@ var tableUI = {
 
     sendReveal: function() {
         if (!this.mySecret) { pokerModal.alert('Secret not available', 'error'); return; }
-        this._sendToAllPlayers({ type: 'REVEAL', tableId: this.tableId, playerPubKey: window.myMaximaKey, secret: this.mySecret }, function(ok) {
+        var msg = { type: 'REVEAL', tableId: this.tableId, playerPubKey: window.myMaximaKey, secret: this.mySecret };
+        MDS.comms.solo(JSON.stringify(msg));
+        this._sendToAllPlayers(msg, function(ok) {
             if (ok) $('#revealBtn').prop('disabled', true).text('Reveal sent');
             else pokerModal.alert('Failed to send reveal', 'error');
         });
@@ -559,6 +721,44 @@ var tableUI = {
     },
 
     handleServiceMessage: function(message) {
+        if (message.type === 'CHANNEL_REQUEST') { handleChannelRequest(message); return; }
+        if (message.type === 'CHANNEL_DENIED') { pokerModal.alert('Channel request denied', 'error'); return; }
+        if (message.type === 'TABLE_DELETED' && message.tableId === this.tableId) {
+            pokerModal.alert('Table was deleted', 'warning');
+            setTimeout(function() { goBackToLobby(); }, 1500);
+            return;
+        }
+        if (message.type === 'CHANNEL_CLOSED' && message.tableId === this.tableId) {
+            pokerModal.alert('Channel closed. Funds returned to wallets.', 'success');
+            this._clearTimers();
+            this.loadChannelInfo();
+            return;
+        }
+        if (message.type === 'CLOSE_REQUEST_UI' && message.tableId === this.tableId) {
+            var spendTx = message.spendTx;
+            var chanId  = message.channelId;
+            var initiator = message.from;
+            pokerModal.confirm('Opponent wants to close the channel cooperatively. Accept and withdraw funds?', function(ok) {
+                if (!ok) return;
+                // Send CLOSE_CONFIRM to own service via comms.solo
+                MDS.comms.solo(JSON.stringify({
+                    type: 'CLOSE_CONFIRM',
+                    channelId: chanId,
+                    tableId: message.tableId,
+                    spendTx: spendTx,
+                    initiator: initiator
+                }));
+            });
+            return;
+        }
+        if (message.type === 'DISPUTE_NOTIFY' && message.tableId === this.tableId) {
+            var self = this;
+            pokerModal.confirm('Opponent started a dispute! Start your own dispute to protect your funds?', function(ok) {
+                if (ok) self.startDispute();
+            });
+            return;
+        }
+        if (message.tableId && message.tableId !== this.tableId) return;
         this.loadChannelInfo();
         this.loadGameState();
     },
@@ -576,7 +776,33 @@ var tableUI = {
         maxima.registerHandler('CHANNEL_CLOSE', function(msg) {
             if (msg.tableId === self.tableId) { self._clearTimers(); self.loadChannelInfo(); }
         });
+        maxima.registerHandler('DISPUTE_NOTIFY', function(msg) {
+            if (msg.tableId === self.tableId) self.handleServiceMessage(msg);
+        });
     }
 };
 
 if (typeof window !== 'undefined') window.tableUI = tableUI;
+
+function handleChannelRequest(data) {
+    var shortFrom = data.from ? data.from.substring(0, 12) + '...' : 'unknown';
+    pokerModal.confirm('Channel request from ' + shortFrom + '. Accept?', function(accepted) {
+        if (!accepted) {
+            maxima.sendRaw(data.from, { type: 'REQUEST_DENIED', tableId: data.tableId }, function() {});
+            return;
+        }
+        var chan = new channel.Channel(data.tableId, data.participants, data.tokenId || '0x00', data.timeout || 30);
+        chan.id = data.channelId;
+        chan.status = 'FUNDING';
+        chan.init(function(err) {
+            if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
+            sql.insertChannelFull(chan, function(res) {
+                if (!res || !res.status) { pokerModal.alert('Failed to save channel', 'error'); return; }
+                channel.set(chan.id, chan);
+                maxima.sendRaw(data.from, { type: 'REQUEST_ACCEPTED', channelId: data.channelId, tableId: data.tableId, participants: data.participants }, function() {
+                    pokerModal.alert('Channel accepted, waiting for funding...', 'success');
+                });
+            });
+        });
+    });
+}

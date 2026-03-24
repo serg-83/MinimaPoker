@@ -9,29 +9,20 @@
 // In‑memory cache of active channels (key: channelId)
 var channels = {};
 
-// Message types for Maxima communication (mirroring Thunder's messages.js)
-var MSG_TYPES = {
-    ACK: 'ACK_MESSAGE',
-    SYNACK: 'SYNACK_MESSAGE',
-    REQ_NEW_CHANNEL: 'REQUEST_NEW_CHANNEL',
-    REQ_ACCEPTED: 'REQUEST_ACCEPTED',
-    REQ_DENIED: 'REQUEST_DENIED',
-    CREATE_CHANNEL: 'CREATE_CHANNEL',
-    FINISH_START_CHANNEL: 'FINISH_START_CHANNEL',
-    SEND_FUNDS: 'SEND_FUNDS',
-    REPLY_SEND_FUNDS: 'REPLY_SEND_FUNDS',
-    SPEND_CHANNEL: 'SPEND_CHANNEL',
-    CANCEL_CHANNEL: 'CANCEL_NEW_CHANNEL'
-};
+// Helper: convert a number to a plain decimal string (no scientific notation)
+// Minima's MiniNumber parser rejects "1e-8" style notation
+function toMinimaAmount(val) {
+    var d = new Decimal(val);
+    // toFixed with enough precision to avoid scientific notation
+    var s = d.toFixed(8);
+    // Strip trailing zeros after decimal point but keep at least one decimal place
+    s = s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '.0');
+    return s;
+}
 
 // Helper: generate a random 16‑char hex string (used as temporary transaction id)
 function randomString() {
-    var hex = '0123456789ABCDEF';
-    var output = '';
-    for (var i = 0; i < 16; ++i) {
-        output += hex.charAt(Math.floor(Math.random() * hex.length));
-    }
-    return output;
+    return utils.genRandomHexString(8);
 }
 
 // ==================== Script Builders ====================
@@ -133,8 +124,8 @@ function createFundingTxn(fundingAddress, addAmount, totalAmount, tokenId, callb
 
         var txid = randomString();
         var cmd = 'txncreate id:' + txid + ';' +
-                    'txnoutput id:' + txid + ' amount:' + totalAmount + ' tokenid:' + tokenId + ' address:' + fundingAddress + ';' +
-                    'txnaddamount id:' + txid + ' onlychange:true tokenid:' + tokenId + ' amount:' + addAmount + ';' +
+                    'txnoutput id:' + txid + ' amount:' + toMinimaAmount(totalAmount) + ' tokenid:' + tokenId + ' address:' + fundingAddress + ';' +
+                    'txnaddamount id:' + txid + ' onlychange:true tokenid:' + tokenId + ' amount:' + toMinimaAmount(addAmount) + ';' +
                     'txnexport id:' + txid + ';' +
                     'txndelete id:' + txid + ';';
 
@@ -173,9 +164,6 @@ function createFundingTxn(fundingAddress, addAmount, totalAmount, tokenId, callb
 }
 
 /**
- * Create a trigger transaction: spends funding output → eltoo address with sequence = 0.
- * @param {string} amount - amount to spend (must equal funding output amount)
-/**
  * Add a participant's funds to an existing funding transaction.
  * Called by non-initiator participants when they receive CREATE_CHANNEL.
  */
@@ -183,7 +171,7 @@ function addToFundingTxn(txHex, addAmount, tokenId, callback) {
     if (new Decimal(addAmount).lessThanOrEqualTo(0)) { callback(null, txHex); return; }
     var txid = randomString();
     var cmd = 'txnimport id:' + txid + ' data:' + txHex + ';' +
-              'txnaddamount id:' + txid + ' onlychange:true tokenid:' + tokenId + ' amount:' + addAmount + ';' +
+              'txnaddamount id:' + txid + ' onlychange:true tokenid:' + tokenId + ' amount:' + toMinimaAmount(addAmount) + ';' +
               'txnexport id:' + txid + ';' +
               'txndelete id:' + txid + ';';
     MDS.cmd(cmd, function(resp) {
@@ -204,8 +192,8 @@ function addToFundingTxn(txHex, addAmount, tokenId, callback) {
 function createTriggerTxn(amount, fundingAddress, eltooAddress, tokenId, callback) {
     var txid = randomString();
     var cmd = 'txncreate id:' + txid + ';' +
-                'txninput id:' + txid + ' tokenid:' + tokenId + ' amount:' + amount + ' address:' + fundingAddress + ' floating:true;' +
-                'txnoutput id:' + txid + ' tokenid:' + tokenId + ' storestate:true amount:' + amount + ' address:' + eltooAddress + ';' +
+                'txninput id:' + txid + ' tokenid:' + tokenId + ' amount:' + toMinimaAmount(amount) + ' address:' + fundingAddress + ' floating:true;' +
+                'txnoutput id:' + txid + ' tokenid:' + tokenId + ' storestate:true amount:' + toMinimaAmount(amount) + ' address:' + eltooAddress + ';' +
                 'txnstate id:' + txid + ' port:101 value:0;' +
                 'txnexport id:' + txid + ';' +
                 'txndelete id:' + txid + ';';
@@ -245,7 +233,7 @@ function createSettlementTxn(hashid, sequence, eltooAddress, totalAmount, output
 
     var txid = randomString();
     var cmd = 'txncreate id:' + txid + ';' +
-              'txninput id:' + txid + ' amount:' + totalAmount + ' tokenid:' + tokenId + ' address:' + eltooAddress + ' floating:true;';
+              'txninput id:' + txid + ' amount:' + toMinimaAmount(totalAmount) + ' tokenid:' + tokenId + ' address:' + eltooAddress + ' floating:true;';
 
     var totalOutputAmount = new Decimal(0);
     for (var outIdx = 0; outIdx < outputs.length; outIdx++) {
@@ -253,7 +241,7 @@ function createSettlementTxn(hashid, sequence, eltooAddress, totalAmount, output
         var amount = new Decimal(out.amount);
         if (amount.greaterThan(0)) {
             totalOutputAmount = totalOutputAmount.plus(amount);
-            cmd += 'txnoutput id:' + txid + ' storestate:true amount:' + out.amount + ' tokenid:' + tokenId + ' address:' + out.address + ';';
+            cmd += 'txnoutput id:' + txid + ' storestate:true amount:' + toMinimaAmount(out.amount) + ' tokenid:' + tokenId + ' address:' + out.address + ';';
         }
     }
 
@@ -283,9 +271,10 @@ function createSettlementTxn(hashid, sequence, eltooAddress, totalAmount, output
             }
         }
 
+        // txnexport is second-to-last command (last is txndelete)
         var txHex = null;
-        if (resp[resp.length-3] && resp[resp.length-3].response && resp[resp.length-3].response.data) {
-            txHex = resp[resp.length-3].response.data;
+        if (resp[resp.length-2] && resp[resp.length-2].response && resp[resp.length-2].response.data) {
+            txHex = resp[resp.length-2].response.data;
         }
         if (!txHex) {
             callback('Failed to create settlement tx', null);
@@ -306,8 +295,8 @@ function createSettlementTxn(hashid, sequence, eltooAddress, totalAmount, output
 function createUpdateTxn(sequence, eltooAddress, totalAmount, tokenId, callback) {
     var txid = randomString();
     var cmd = 'txncreate id:' + txid + ';' +
-                'txninput id:' + txid + ' tokenid:' + tokenId + ' amount:' + totalAmount + ' address:' + eltooAddress + ' floating:true;' +
-                'txnoutput id:' + txid + ' tokenid:' + tokenId + ' amount:' + totalAmount + ' storestate:true address:' + eltooAddress + ';' +
+                'txninput id:' + txid + ' tokenid:' + tokenId + ' amount:' + toMinimaAmount(totalAmount) + ' address:' + eltooAddress + ' floating:true;' +
+                'txnoutput id:' + txid + ' tokenid:' + tokenId + ' amount:' + toMinimaAmount(totalAmount) + ' storestate:true address:' + eltooAddress + ';' +
                 'txnstate id:' + txid + ' port:100 value:FALSE;' +
                 'txnstate id:' + txid + ' port:101 value:' + sequence + ';' +
                 'txnexport id:' + txid + ';' +
@@ -390,12 +379,43 @@ function signTxn(txHex, pubKey, callback) {
  * @param {string} txHex
  * @param {function} callback - called with (err, result)
  */
-function postTxn(txHex, callback) {
-    // Import → add scripts+MMR (required for floating inputs) → post → delete
-    var txid = 'post_' + randomString();
+/**
+ * Prepare a transaction by adding local scripts and MMR proofs.
+ * Each node should call this to inject its own scripts before posting.
+ * @param {string} txHex - transaction hex
+ * @param {function} callback - called with (err, preparedTxHex)
+ */
+function prepareTxn(txHex, callback) {
+    var txid = 'prep_' + randomString();
     var cmd = 'txnimport id:' + txid + ' data:' + txHex + ';' +
               'txnscript id:' + txid + ' auto:true;' +
               'txnmmr id:' + txid + ';' +
+              'txnexport id:' + txid + ';' +
+              'txndelete id:' + txid;
+    MDS.cmd(cmd, function(res) {
+        if (!res || !Array.isArray(res)) {
+            callback('Prepare failed: ' + JSON.stringify(res), null);
+            return;
+        }
+        // [0]=import, [1]=script, [2]=mmr, [3]=export, [4]=delete
+        var exported = (res[3] && res[3].response && res[3].response.data) ? res[3].response.data : null;
+        if (!exported) {
+            callback('Prepare failed: no export data', null);
+        } else {
+            callback(null, exported);
+        }
+    });
+}
+
+/**
+ * Post a fully prepared transaction. Uses auto:false since scripts/MMR
+ * should already be set via prepareTxn on all participating nodes.
+ * @param {string} txHex
+ * @param {function} callback - called with (err, result)
+ */
+function postTxn(txHex, callback) {
+    var txid = 'post_' + randomString();
+    var cmd = 'txnimport id:' + txid + ' data:' + txHex + ';' +
               'txnpost id:' + txid + ' auto:true;' +
               'txndelete id:' + txid;
     MDS.cmd(cmd, function(res) {
@@ -403,8 +423,7 @@ function postTxn(txHex, callback) {
             callback('Post failed: ' + JSON.stringify(res), null);
             return;
         }
-        // res[3] is txnpost result (0=import, 1=script, 2=mmr, 3=post, 4=delete)
-        var postRes = res[3];
+        var postRes = res[1];
         if (!postRes || !postRes.status) {
             callback('Post failed: ' + JSON.stringify(postRes), null);
         } else {
@@ -444,7 +463,8 @@ Channel.prototype.init = function(callback) {
     var self = this;
     var pubKeys = [];
     for (var i = 0; i < self.participants.length; i++) {
-        pubKeys.push(self.participants[i].pubKey);
+        // Use walletKey for scripts (txnsign needs wallet key), fall back to pubKey
+        pubKeys.push(self.participants[i].walletKey || self.participants[i].pubKey);
     }
     var totalSum = new Decimal(0);
     for (var j = 0; j < self.participants.length; j++) {
@@ -544,13 +564,6 @@ Channel.signFunding = function(fundingHex, callback) {
 Channel.prototype.createUpdateAsync = function(newBalances, gameState, callback) {
     var self = this;
     var newSeq = self.sequence + 1;
-
-    // Verify new sequence is greater than current
-    if (newSeq <= self.sequence) {
-        callback(new Error('Sequence must be greater than current (' + self.sequence + ')'), null);
-        return;
-    }
-
     var totalSum = new Decimal(0);
     for (var i = 0; i < self.participants.length; i++) {
         totalSum = totalSum.plus(self.participants[i].amount);
@@ -626,26 +639,49 @@ Channel.prototype.closeCooperative = function(callback) {
     var total = totalSum.toString();
 
     var outputs = [];
+    var balanceSum = new Decimal(0);
     for (var j = 0; j < self.participants.length; j++) {
         var p = self.participants[j];
-        outputs.push({
-            address: p.address,
-            amount: self.balances[p.pubKey] || '0'
-        });
+        var amt = (self.balances && self.balances[p.pubKey]) ? self.balances[p.pubKey] : '0';
+        balanceSum = balanceSum.plus(amt);
+        outputs.push({ address: p.address, amount: amt });
+    }
+    // If balances don't add up to total, fall back to initial deposits
+    if (!balanceSum.equals(new Decimal(total))) {
+        outputs = [];
+        for (var fb = 0; fb < self.participants.length; fb++) {
+            outputs.push({ address: self.participants[fb].address, amount: self.participants[fb].amount });
+        }
     }
 
     self._createSpendFundingTxn(total, outputs, function(err, spendTx) {
-        if (err) {
-            callback(err);
-            return;
-        }
-        // In a real implementation, we'd exchange signatures via SPEND_CHANNEL.
-        // Here we assume we already have all signatures.
-        postTxn(spendTx, function(err, res) {
-            if (err) {
-                callback(err);
-            } else {
-                callback(null, res && res.response ? res.response.txid : null);
+        if (err) { callback(err); return; }
+        // Sign with our wallet key
+        var myWalletKey = (typeof getMyWalletKey === 'function') ? getMyWalletKey() :
+                          (typeof window !== 'undefined' ? window.myMinimaPublicKey : '');
+        signTxn(spendTx, myWalletKey, function(err2, signed) {
+            if (err2) { callback(err2); return; }
+            // Send to other participants to co-sign and post
+            var myMaxKey = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :
+                           (typeof window !== 'undefined' ? window.myMaximaKey : '');
+            var others = [];
+            for (var k = 0; k < self.participants.length; k++) {
+                if (self.participants[k].pubKey !== myMaxKey) others.push(self.participants[k].pubKey);
+            }
+            if (others.length === 0) {
+                // Solo — just post (auto:true adds MMR proofs)
+                postTxn(signed, function(e, res) {
+                    if (e) { callback(e); return; }
+                    callback(null, res && res.response ? res.response.txid : null);
+                });
+                return;            }
+            var sent = 0;
+            for (var oi = 0; oi < others.length; oi++) {
+                (function(pk) {
+                    maxima.sendRaw(pk, { type: 'CLOSE_REQUEST', channelId: self.id, tableId: self.tableId, spendTx: signed }, function() {
+                        if (++sent === others.length) callback(null, 'pending');
+                    });
+                })(others[oi]);
             }
         });
     });
@@ -655,15 +691,16 @@ Channel.prototype._createSpendFundingTxn = function(total, outputs, callback) {
     var self = this;
     var txid = randomString();
     var cmd = 'txncreate id:' + txid + ';' +
-              'txninput id:' + txid + ' amount:' + total + ' tokenid:' + self.tokenId + ' address:' + self.fundingAddress + ' floating:true;';
+              'txninput id:' + txid + ' amount:' + toMinimaAmount(total) + ' tokenid:' + self.tokenId + ' address:' + self.fundingAddress + ' floating:true;';
 
     for (var i = 0; i < outputs.length; i++) {
         var out = outputs[i];
         if (new Decimal(out.amount).greaterThan(0)) {
-            cmd += 'txnoutput id:' + txid + ' amount:' + out.amount + ' tokenid:' + self.tokenId + ' address:' + out.address + ';';
+            cmd += 'txnoutput id:' + txid + ' storestate:true amount:' + toMinimaAmount(out.amount) + ' tokenid:' + self.tokenId + ' address:' + out.address + ';';
         }
     }
-    cmd += 'txnexport id:' + txid + ';' +
+    cmd += 'txnstate id:' + txid + ' port:200 value:' + self.id + ';' +
+           'txnexport id:' + txid + ';' +
            'txndelete id:' + txid + ';';
 
     MDS.cmd(cmd, function(resp) {
@@ -703,13 +740,9 @@ Channel.prototype.startDispute = function(callback) {
         self.disputeStartBlock = currentBlock;
         self.status = 'DISPUTE';
 
-        // Post the trigger transaction
+        // Post the trigger transaction (auto:true adds MMR proofs automatically)
         postTxn(self.triggerTx, function(err, res) {
-            if (err) {
-                callback(err, null);
-                return;
-            }
-            // Save dispute info to DB with the start block
+            if (err) { callback(err, null); return; }
             sql.updateChannelAfterFunding(self.id, null, 'DISPUTE', currentBlock, function() {});
             callback(null, { triggerPosted: true, startBlock: currentBlock });
         });
@@ -743,86 +776,56 @@ Channel.prototype.claimSettlement = function(callback) {
 Channel.fromRow = function(row) {
     var participants = [];
     if (row.participants) {
-        try {
-            participants = JSON.parse(row.participants);
-        } catch (e) {
-            participants = [];
+        if (Array.isArray(row.participants)) {
+            participants = row.participants;
+        } else {
+            try { participants = JSON.parse(row.participants); } catch (e) { participants = []; }
         }
     }
-    var chan = new Channel(row.tableId, participants, row.tokenId || '0x00', row.timeout);
-    chan.id = row.hashId;
-    chan.fundingAddress = row.fundingAddress;
-    chan.eltooAddress = row.eltooAddress;
-    chan.fundingTx = row.fundingTx;
-    chan.triggerTx = row.triggerTx;
-    chan.settlementTx = row.settlementTx;
-    chan.updateTx = row.updateTx;
-    chan.sequence = row.sequence || 0;
+    var balances = {};
     if (row.balances) {
-        try {
-            chan.balances = JSON.parse(row.balances);
-        } catch (e) {
-            chan.balances = {};
+        if (typeof row.balances === 'object' && !Array.isArray(row.balances)) {
+            balances = row.balances;
+        } else {
+            try { balances = JSON.parse(row.balances); } catch (e) { balances = {}; }
         }
     }
-    chan.status = row.status;
-    chan.disputeStartBlock = row.disputeStartBlock;
+    var signatures = { funding: {}, trigger: {}, settlement: {} };
     if (row.signatures) {
-        try {
-            chan.signatures = JSON.parse(row.signatures);
-        } catch (e) {
-            chan.signatures = { funding: {}, trigger: {}, settlement: {} };
+        if (typeof row.signatures === 'object' && !Array.isArray(row.signatures)) {
+            signatures = row.signatures;
+        } else {
+            try { signatures = JSON.parse(row.signatures); } catch (e) {}
         }
+    }
+    var chan = new Channel(row.tableId || row.tableid, participants, row.tokenId || row.tokenid || '0x00', row.timeout);
+    chan.id = row.hashId || row.hashid;
+    chan.fundingAddress = row.fundingAddress || row.fundingaddress;
+    chan.eltooAddress   = row.eltooAddress   || row.eltooaddress;
+    chan.fundingTx  = row.fundingTx  || row.fundingtx;
+    chan.triggerTx  = row.triggerTx  || row.triggertx;
+    chan.settlementTx = row.settlementTx || row.settlementtx;
+    chan.updateTx   = row.updateTx   || row.updatetx;
+    chan.sequence   = row.sequence   || 0;
+    chan.balances   = balances;
+    chan.status     = row.status;
+    chan.disputeStartBlock = row.disputeStartBlock || row.disputestartblock;
+    chan.signatures = signatures;
+    // Rebuild scripts from stored data so trackScript/dispute works after restart
+    if (chan.id && participants.length > 0) {
+        var pubKeys = [];
+        for (var pk = 0; pk < participants.length; pk++) {
+            pubKeys.push(participants[pk].walletKey || participants[pk].pubKey);
+        }
+        chan.fundingScript = buildFundingScript(chan.id, pubKeys);
+        chan.eltooScript = buildEltooScript(chan.id, pubKeys, chan.timeoutBlocks);
     }
     return chan;
 };
 
-// ==================== Maxima Message Handlers ====================
-
-// These will be registered with maxima.registerHandler.
-
-function handleRequestNewChannel(msg, fromPubKey) {
-    MDS.log('REQUEST_NEW_CHANNEL received: ' + JSON.stringify(msg));
-    if (window.lobby && lobby.handleChannelRequest) {
-        lobby.handleChannelRequest(msg, fromPubKey);
-    }
-}
-
-function handleCreateChannel(msg, fromPubKey) {
-    MDS.log('CREATE_CHANNEL received');
-    // To be implemented in service.js
-}
-
-function handleFinishStartChannel(msg, fromPubKey) {
-    MDS.log('FINISH_START_CHANNEL received');
-}
-
-function handleSendFunds(msg, fromPubKey) {
-    MDS.log('SEND_FUNDS received');
-}
-
-function handleReplySendFunds(msg, fromPubKey) {
-    MDS.log('REPLY_SEND_FUNDS received');
-}
-
-function handleSpendChannel(msg, fromPubKey) {
-    MDS.log('SPEND_CHANNEL received');
-}
-
-// Register all handlers with maxima (assumed to be called after maxima.init)
-function registerMessageHandlers() {
-    maxima.registerHandler(MSG_TYPES.REQ_NEW_CHANNEL, handleRequestNewChannel);
-    maxima.registerHandler(MSG_TYPES.CREATE_CHANNEL, handleCreateChannel);
-    maxima.registerHandler(MSG_TYPES.FINISH_START_CHANNEL, handleFinishStartChannel);
-    maxima.registerHandler(MSG_TYPES.SEND_FUNDS, handleSendFunds);
-    maxima.registerHandler(MSG_TYPES.REPLY_SEND_FUNDS, handleReplySendFunds);
-    maxima.registerHandler(MSG_TYPES.SPEND_CHANNEL, handleSpendChannel);
-}
-
 // ==================== Public API ====================
 
 var _channelExport = {
-    MSG_TYPES: MSG_TYPES,
     Channel: Channel,
     createFundingTxn: createFundingTxn,
     addToFundingTxn: addToFundingTxn,
@@ -830,10 +833,12 @@ var _channelExport = {
     createSettlementTxn: createSettlementTxn,
     createUpdateTxn: createUpdateTxn,
     signTxn: signTxn,
+    prepareTxn: prepareTxn,
     postTxn: postTxn,
     trackScript: trackScript,
     removeScript: removeScript,
-    registerMessageHandlers: registerMessageHandlers,
+    buildFundingScript: buildFundingScript,
+    buildEltooScript: buildEltooScript,
     fromRow: Channel.fromRow,
     get: function(id) { return channels[id] || null; },
     set: function(id, chan) { channels[id] = chan; },
