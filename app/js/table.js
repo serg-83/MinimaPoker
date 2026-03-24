@@ -109,6 +109,9 @@ var tableUI = {
                 if (self._isEnforcer()) {
                     setTimeout(function() {
                         self._nextHandScheduled = false;
+                        // Don't start new hand if channel is closed
+                        var status = self.channelInfo ? (self.channelInfo.status || self.channelInfo.STATUS) : null;
+                        if (status === 'CLOSED') return;
                         self._autoStartGame();
                     }, 4000);
                 }

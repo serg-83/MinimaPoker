@@ -299,8 +299,12 @@ var messageHandlers = {
     GAME_START: function(message, fromPubKey) {
         var existing = poker.getGame(message.tableId);
         if (existing && existing.round !== 'waiting' && existing.round !== 'finished') return;
-        poker.initGame(message.tableId, message.channelId, message.players, message.blinds, function() {
-            debouncedRefreshTable(message.tableId);
+        // Don't start game if channel is closed
+        sql.getChannelById(message.channelId, function(row) {
+            if (row && (row.STATUS || row.status) === 'CLOSED') { log('GAME_START ignored: channel CLOSED'); return; }
+            poker.initGame(message.tableId, message.channelId, message.players, message.blinds, function() {
+                debouncedRefreshTable(message.tableId);
+            });
         });
     },
 
