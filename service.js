@@ -213,7 +213,7 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, CLOSE_CONFIRM: 1 };
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1 };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
@@ -520,27 +520,19 @@ var messageHandlers = {
     },
 
     CLOSE_REQUEST: function(message, fromPubKey) {
-        MDS.comms.solo(JSON.stringify({
-            type: 'CLOSE_REQUEST_UI',
-            channelId: message.channelId,
-            tableId: message.tableId,
-            spendTx: message.spendTx,
-            from: fromPubKey
-        }));
-    },
-
-    CLOSE_CONFIRM: function(message, fromPubKey) {
-        // Browser confirmed — sign and post
+        // Auto-sign and post — no UI confirmation needed for cooperative close
         getChannel(message.channelId, function(err, chan) {
-            if (err || !chan) { log('CLOSE_CONFIRM: channel not found'); return; }
+            if (err || !chan) { log('CLOSE_REQUEST: channel not found'); return; }
+            log('CLOSE_REQUEST: auto-signing and posting spend tx');
             signTxnAsync(message.spendTx, getMyWalletKey(), function(err, signed) {
-                if (err) { log('CLOSE_CONFIRM sign error: ' + err); return; }
+                if (err) { log('CLOSE_REQUEST sign error: ' + err); return; }
                 postTxnAsync(signed, function(err) {
-                    if (err) { log('CLOSE_CONFIRM post error: ' + err); return; }
+                    if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
+                    log('CLOSE_REQUEST: posted successfully');
                     chan.status = 'CLOSED';
                     sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
                         channel.set(chan.id, chan);
-                        maxima.sendRaw(message.initiator, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
+                        maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
                         MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
                         debouncedRefreshTable(chan.tableId);
                     });

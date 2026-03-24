@@ -735,23 +735,6 @@ var tableUI = {
             this.loadChannelInfo();
             return;
         }
-        if (message.type === 'CLOSE_REQUEST_UI' && message.tableId === this.tableId) {
-            var spendTx = message.spendTx;
-            var chanId  = message.channelId;
-            var initiator = message.from;
-            pokerModal.confirm('Opponent wants to close the channel cooperatively. Accept and withdraw funds?', function(ok) {
-                if (!ok) return;
-                // Send CLOSE_CONFIRM to own service via comms.solo
-                MDS.comms.solo(JSON.stringify({
-                    type: 'CLOSE_CONFIRM',
-                    channelId: chanId,
-                    tableId: message.tableId,
-                    spendTx: spendTx,
-                    initiator: initiator
-                }));
-            });
-            return;
-        }
         if (message.type === 'DISPUTE_NOTIFY' && message.tableId === this.tableId) {
             var self = this;
             pokerModal.confirm('Opponent started a dispute! Start your own dispute to protect your funds?', function(ok) {
