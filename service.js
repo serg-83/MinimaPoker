@@ -523,18 +523,24 @@ var messageHandlers = {
         // Auto-sign and post — no UI confirmation needed for cooperative close
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('CLOSE_REQUEST: channel not found'); return; }
-            log('CLOSE_REQUEST: auto-signing and posting spend tx');
+            log('CLOSE_REQUEST: signing spend tx, fundingAddress=' + (chan.fundingAddress || 'unknown'));
             signTxnAsync(message.spendTx, 'auto', function(err, signed) {
                 if (err) { log('CLOSE_REQUEST sign error: ' + err); return; }
-                postTxnAsync(signed, function(err) {
-                    if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
-                    log('CLOSE_REQUEST: posted successfully');
-                    chan.status = 'CLOSED';
-                    sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
-                        channel.set(chan.id, chan);
-                        maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
-                        MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
-                        debouncedRefreshTable(chan.tableId);
+                // Check tx validity before posting
+                var checkId = 'chk_' + randomString();
+                MDS.cmd('txnimport id:' + checkId + ' data:' + signed + ';txncheck id:' + checkId + ';txndelete id:' + checkId, function(chkRes) {
+                    var chk = Array.isArray(chkRes) ? chkRes[1] : null;
+                    log('CLOSE_REQUEST txncheck: ' + JSON.stringify(chk && chk.response));
+                    postTxnAsync(signed, function(err, res) {
+                        if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
+                        log('CLOSE_REQUEST: posted ok: ' + JSON.stringify(res && res.response));
+                        chan.status = 'CLOSED';
+                        sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
+                            channel.set(chan.id, chan);
+                            maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
+                            MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
+                            debouncedRefreshTable(chan.tableId);
+                        });
                     });
                 });
             });
