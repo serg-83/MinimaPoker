@@ -392,7 +392,7 @@
                 }
                 var html = '<div style="max-height:60vh;overflow-y:auto;font-size:0.85rem">';
                 html += '<table style="width:100%;border-collapse:collapse">';
-                html += '<tr style="border-bottom:1px solid #444"><th style="text-align:left;padding:4px">Status</th><th style="text-align:left;padding:4px">Balances</th><th style="text-align:left;padding:4px">Seq</th><th style="padding:4px"></th></tr>';
+                html += '<tr style="border-bottom:1px solid #444"><th style="text-align:left;padding:4px">Status</th><th style="text-align:left;padding:4px">Balances</th><th style="text-align:left;padding:4px">Date</th><th style="padding:4px"></th></tr>';
                 for (var i = 0; i < channels.length; i++) {
                     var ch = channels[i];
                     var s = ch.status || 'UNKNOWN';
@@ -404,28 +404,49 @@
                         for (var k in b) { if (b.hasOwnProperty(k)) parts.push(k.slice(0,8) + '…:' + b[k]); }
                         balStr = parts.join(', ');
                     }
-                    var seq = ch.sequence || 0;
+                    var dateStr = '';
+                    var ts = ch.closedAt || ch.closedat || ch.createdAt || ch.createdat;
+                    if (ts && ts > 0) {
+                        var d = new Date(parseInt(ts));
+                        dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+                    }
                     var actionBtn = '';
                     if (s === 'OPEN' || s === 'FUNDING' || s === 'DISPUTE') {
-                        actionBtn = '<button class="ch-action-btn" data-id="' + ch.id + '" data-status="' + s + '" data-tableid="' + (ch.tableId || '') + '" style="font-size:0.75rem;padding:2px 8px">Manage</button>';
+                        var tid = ch.tableId || ch.tableid || '';
+                        if (tid) {
+                            actionBtn = '<button class="ch-action-btn" data-tableid="' + tid + '" style="font-size:0.75rem;padding:2px 8px">Manage</button>';
+                        }
                     } else if (s === 'CLOSED') {
-                        actionBtn = '<button class="ch-delete-btn" data-id="' + ch.id + '" style="font-size:0.75rem;padding:2px 8px;opacity:0.6">Delete</button>';
+                        var spendTx = ch.spendTx || ch.spendtx || '';
+                        if (spendTx) {
+                            actionBtn = '<button class="ch-rebroadcast-btn" data-spend="' + spendTx + '" style="font-size:0.75rem;padding:2px 8px">Rebroadcast</button> ';
+                        }
+                        actionBtn += '<button class="ch-delete-btn" data-id="' + ch.id + '" style="font-size:0.75rem;padding:2px 8px;opacity:0.6">Delete</button>';
                     }
-                    html += '<tr style="border-bottom:1px solid #333"><td style="padding:4px"><span style="color:' + color + '">' + s + '</span></td><td style="padding:4px">' + (balStr || '—') + '</td><td style="padding:4px">' + seq + '</td><td style="padding:4px">' + actionBtn + '</td></tr>';
+                    html += '<tr style="border-bottom:1px solid #333"><td style="padding:4px"><span style="color:' + color + '">' + s + '</span></td><td style="padding:4px">' + (balStr || '—') + '</td><td style="padding:4px;white-space:nowrap">' + dateStr + '</td><td style="padding:4px">' + actionBtn + '</td></tr>';
                 }
                 html += '</table></div>';
 
                 pokerModal.custom('Channel History', html, function(container) {
                     $(container).on('click', '.ch-action-btn', function() {
-                        var id = $(this).data('id');
-                        var status = $(this).data('status');
                         var tableId = $(this).data('tableid');
                         pokerModal.close();
-                        if (tableId) {
-                            window.location.href = 'table.html?tableId=' + tableId;
-                        } else {
-                            pokerModal.alert('No table associated. Channel ID: ' + id, 'info');
-                        }
+                        window.location.href = 'table.html?tableId=' + tableId;
+                    });
+                    $(container).on('click', '.ch-rebroadcast-btn', function() {
+                        var spendTx = $(this).data('spend');
+                        var btn = $(this);
+                        btn.prop('disabled', true).text('Sending…');
+                        MDS.cmd('txnimport data:' + spendTx, function(r1) {
+                            if (!r1 || !r1.status) { btn.prop('disabled', false).text('Rebroadcast'); pokerModal.alert('Import failed', 'error'); return; }
+                            var txnId = r1.response && r1.response.txn && r1.response.txn.id;
+                            if (!txnId) { btn.prop('disabled', false).text('Rebroadcast'); pokerModal.alert('No txn id', 'error'); return; }
+                            MDS.cmd('txnpost id:' + txnId + ' auto:true', function(r2) {
+                                MDS.cmd('txndelete id:' + txnId, function() {});
+                                if (r2 && r2.status) { btn.text('Sent ✓'); }
+                                else { btn.prop('disabled', false).text('Rebroadcast'); pokerModal.alert('Post failed: ' + (r2 && r2.error ? r2.error : ''), 'error'); }
+                            });
+                        });
                     });
                     $(container).on('click', '.ch-delete-btn', function() {
                         var id = $(this).data('id');

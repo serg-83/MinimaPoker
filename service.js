@@ -543,7 +543,7 @@ var messageHandlers = {
                     if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
                     log('CLOSE_REQUEST: posted ok');
                     chan.status = 'CLOSED';
-                    sql.updateChannelAfterFunding(chan.id, null, 'CLOSED', null, function() {
+                    sql.saveChannelSpendTx(chan.id, signed, function() {
                         channel.set(chan.id, chan);
                         maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
                         MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));

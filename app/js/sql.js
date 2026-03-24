@@ -33,7 +33,8 @@ var SQL = {
                 'participants TEXT, balances TEXT, lastGameState TEXT, signatures TEXT, ' +
                 'status TEXT, sequence INTEGER DEFAULT 0, timeout INTEGER, fundingTxId TEXT, ' +
                 'disputeStartBlock INTEGER, fundingSpent INTEGER DEFAULT 0, ' +
-                'payoutFound INTEGER DEFAULT 0, payoutAmount TEXT, createdAt BIGINT)',
+                'payoutFound INTEGER DEFAULT 0, payoutAmount TEXT, createdAt BIGINT, ' +
+                'spendTx TEXT DEFAULT \'\', closedAt BIGINT DEFAULT 0)',
             'CREATE TABLE IF NOT EXISTS channel_states (' +
                 'id INTEGER AUTO_INCREMENT PRIMARY KEY, channelId TEXT, sequence INTEGER, ' +
                 'state TEXT, signatures TEXT, createdAt BIGINT)',
@@ -49,8 +50,24 @@ var SQL = {
         MDS.sql("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)", function() {
             MDS.sql("SELECT version FROM _schema_version WHERE version=2", function(vres) {
                 if (vres && vres.status && vres.rows && vres.rows.length > 0) {
-                    // Already migrated — just ensure tables exist
-                    runCreates();
+                    // v2 done — check v3 (add spendTx, closedAt to channels)
+                    MDS.sql("SELECT version FROM _schema_version WHERE version=3", function(v3res) {
+                        if (v3res && v3res.status && v3res.rows && v3res.rows.length > 0) {
+                            runCreates();
+                        } else {
+                            var m3 = [
+                                "ALTER TABLE channels ADD COLUMN spendTx TEXT DEFAULT ''",
+                                "ALTER TABLE channels ADD COLUMN closedAt BIGINT DEFAULT 0",
+                                "INSERT INTO _schema_version (version) VALUES (3)"
+                            ];
+                            var mi3 = 0;
+                            function runM3() {
+                                if (mi3 >= m3.length) { runCreates(); return; }
+                                MDS.sql(m3[mi3++], function() { runM3(); });
+                            }
+                            runM3();
+                        }
+                    });
                 } else {
                     // Run migration
                     var migrations = [
@@ -59,7 +76,8 @@ var SQL = {
                         'DROP TABLE IF EXISTS channel_states',
                         'DROP TABLE IF EXISTS logs',
                         'DELETE FROM _schema_version',
-                        'INSERT INTO _schema_version (version) VALUES (2)'
+                        'INSERT INTO _schema_version (version) VALUES (2)',
+                        'INSERT INTO _schema_version (version) VALUES (3)'
                     ];
                     var mi = 0;
                     function runMigrations() {
@@ -122,10 +140,14 @@ var SQL = {
         var id = this._esc(tableId);
         MDS.sql("DELETE FROM tables WHERE tableId=" + id, function() {
             MDS.sql("DELETE FROM players WHERE tableId=" + id, function() {
-                MDS.sql("DELETE FROM channels WHERE tableId=" + id, function(res) {
-                    self._invalidateCache('tables');
-                    self._invalidateCache(tableId);
-                    if (callback) callback(res);
+                // Keep channel in history — just clear tableId link
+                MDS.sql("UPDATE channels SET tableId='' WHERE tableId=" + id, function() {
+                    // Trim history to 100 most recent
+                    MDS.sql("DELETE FROM channels WHERE hashId NOT IN (SELECT hashId FROM channels ORDER BY rowid DESC LIMIT 100)", function() {
+                        self._invalidateCache('tables');
+                        self._invalidateCache(tableId);
+                        if (callback) callback();
+                    });
                 });
             });
         });
@@ -133,7 +155,7 @@ var SQL = {
 
     getAllChannels: function(callback) {
         var self = this;
-        MDS.sql("SELECT * FROM channels ORDER BY rowid DESC", function(res) {
+        MDS.sql("SELECT * FROM channels ORDER BY rowid DESC LIMIT 100", function(res) {
             var rows = (res && res.status && res.rows) ? res.rows : [];
             callback(rows.map(function(r) { return self._parseChannelRow(r); }));
         });
@@ -206,8 +228,14 @@ var SQL = {
         if (fundingTxId !== null && fundingTxId !== undefined) sets.push("fundingTxId=" + this._esc(fundingTxId));
         if (status !== null && status !== undefined) sets.push("status=" + this._esc(status));
         if (disputeStartBlock !== null && disputeStartBlock !== undefined) sets.push("disputeStartBlock=" + disputeStartBlock);
+        if (status === 'CLOSED') sets.push("closedAt=" + Date.now());
         if (sets.length === 0) { if (callback) callback(null); return; }
         MDS.sql("UPDATE channels SET " + sets.join(',') + " WHERE hashId=" + this._esc(channelId), callback);
+    },
+
+    saveChannelSpendTx: function(channelId, spendTx, callback) {
+        MDS.sql("UPDATE channels SET spendTx=" + this._esc(spendTx) + ",status='CLOSED',closedAt=" + Date.now() +
+            " WHERE hashId=" + this._esc(channelId), callback);
     },
 
     updateChannelStateWithSignatures: function(channelId, balances, gameState, sequence, signatures, callback) {
