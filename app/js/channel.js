@@ -656,10 +656,7 @@ Channel.prototype.closeCooperative = function(callback) {
 
     self._createSpendFundingTxn(total, outputs, function(err, spendTx) {
         if (err) { callback(err); return; }
-        // Sign with our wallet key
-        var myWalletKey = (typeof getMyWalletKey === 'function') ? getMyWalletKey() :
-                          (typeof window !== 'undefined' ? window.myMinimaPublicKey : '');
-        signTxn(spendTx, myWalletKey, function(err2, signed) {
+        signTxn(spendTx, 'auto', function(err2, signed) {
             if (err2) { callback(err2); return; }
             // Send to other participants to co-sign and post
             var myMaxKey = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :

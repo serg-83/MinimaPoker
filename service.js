@@ -349,9 +349,9 @@ var messageHandlers = {
                 MDS.cmd('txnimport id:' + mmrId + ' data:' + fundingHex + ';txnscript id:' + mmrId + ' auto:true;txnmmr id:' + mmrId + ';txnexport id:' + mmrId + ';txndelete id:' + mmrId, function(mmrResp) {
                     var fundingWithMMR = (mmrResp && Array.isArray(mmrResp) && mmrResp[3] && mmrResp[3].response && mmrResp[3].response.data) ? mmrResp[3].response.data : fundingHex;
                     chan.fundingTx = fundingWithMMR;
-                    signTxnAsync(chan.triggerTx, getMyWalletKey(), function(err, signedTrigger) {
+                    signTxnAsync(chan.triggerTx, 'auto', function(err, signedTrigger) {
                         if (err) { log(err); return; }
-                        signTxnAsync(chan.settlementTx, getMyWalletKey(), function(err, signedSettle) {
+                        signTxnAsync(chan.settlementTx, 'auto', function(err, signedSettle) {
                             if (err) { log(err); return; }
                             log('REQUEST_ACCEPTED: sending CREATE_CHANNEL fundingLen=' + fundingWithMMR.length);
                             maxima.sendRaw(fromPubKey, {
@@ -398,10 +398,10 @@ var messageHandlers = {
                 var mmrId = 'mmr_' + randomString();
                 MDS.cmd('txnimport id:' + mmrId + ' data:' + fundingWithMyFunds + ';txnscript id:' + mmrId + ' auto:true;txnmmr id:' + mmrId + ';txnexport id:' + mmrId + ';txndelete id:' + mmrId, function(mmrResp) {
                     var fundingMmr = (mmrResp && Array.isArray(mmrResp) && mmrResp[3] && mmrResp[3].response && mmrResp[3].response.data) ? mmrResp[3].response.data : fundingWithMyFunds;
-                    log('CREATE_CHANNEL: signing trigger/settle with walletKey=' + getMyWalletKey().substring(0,20));
-                    signTxnAsync(chan.triggerTx, getMyWalletKey(), function(err, trigger) {
+                    log('CREATE_CHANNEL: signing trigger/settle');
+                    signTxnAsync(chan.triggerTx, 'auto', function(err, trigger) {
                         if (err) { log('CREATE_CHANNEL sign trigger failed: ' + err); return; }
-                        signTxnAsync(chan.settlementTx, getMyWalletKey(), function(err, settle) {
+                        signTxnAsync(chan.settlementTx, 'auto', function(err, settle) {
                             if (err) { log('CREATE_CHANNEL sign settle failed: ' + err); return; }
                             signTxnAsync(fundingMmr, 'auto', function(err, funding) {
                                 if (err) { log('CREATE_CHANNEL sign funding failed: ' + err); return; }
@@ -452,9 +452,9 @@ var messageHandlers = {
     SEND_FUNDS: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for SEND_FUNDS: ' + message.channelId); return; }
-            signTxnAsync(message.settlementTx, getMyWalletKey(), function(err, settle) {
+            signTxnAsync(message.settlementTx, 'auto', function(err, settle) {
                 if (err) { log(err); return; }
-                signTxnAsync(message.updateTx, getMyWalletKey(), function(err, update) {
+                signTxnAsync(message.updateTx, 'auto', function(err, update) {
                     if (err) { log(err); return; }
                     maxima.sendRaw(fromPubKey, {
                         type: 'REPLY_SEND_FUNDS', channelId: message.channelId,
@@ -494,7 +494,7 @@ var messageHandlers = {
     SPEND_CHANNEL: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for SPEND_CHANNEL'); return; }
-            signTxnAsync(message.spendTx, getMyWalletKey(), function(err, signed) {
+            signTxnAsync(message.spendTx, 'auto', function(err, signed) {
                 if (err) { log(err); return; }
                 postTxnAsync(signed, function(err) {
                     if (err) { log(err); return; }
@@ -524,7 +524,7 @@ var messageHandlers = {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('CLOSE_REQUEST: channel not found'); return; }
             log('CLOSE_REQUEST: auto-signing and posting spend tx');
-            signTxnAsync(message.spendTx, getMyWalletKey(), function(err, signed) {
+            signTxnAsync(message.spendTx, 'auto', function(err, signed) {
                 if (err) { log('CLOSE_REQUEST sign error: ' + err); return; }
                 postTxnAsync(signed, function(err) {
                     if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
