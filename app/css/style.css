@@ -26,6 +26,7 @@
 html {
   height: 100%;
   width: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -33,21 +34,21 @@ body {
   background-image:
     radial-gradient(circle at 20% 30%, rgba(212, 175, 55, 0.05) 0%, transparent 30%),
     repeating-linear-gradient(45deg, rgba(0,0,0,0.02) 0px, rgba(0,0,0,0.02) 2px, transparent 2px, transparent 6px);
-  /* Fallback fonts if Google Fonts unavailable */
   font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif;
-  min-height: 100%;
+  height: 100%;
   width: 100%;
   margin: 0;
   padding: 0;
   display: -webkit-box;
   display: -ms-flexbox;
   display: flex;
+  overflow: hidden;
   color: var(--text-light);
 }
 
 .container {
   width: 100%;
-  min-height: 100%;
+  height: 100%;
   max-width: none;
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(12px);
@@ -57,7 +58,7 @@ body {
   padding: 0;
   box-shadow: none;
   position: relative;
-  overflow: visible;
+  overflow: hidden;
   display: flex;
 }
 
@@ -69,7 +70,7 @@ body {
 .main-content {
   flex: 1;
   min-width: 0;
-  min-height: 0;
+  height: 100%;
   padding: 20px;
   padding-bottom: 90px;
   overflow-y: auto;
@@ -870,29 +871,14 @@ button.danger:hover, .danger:hover { filter: brightness(1.1); }
   }
 }
 
-/* Desktop layout: allow scrolling, reasonable max-width */
+/* Desktop layout: reasonable max-width */
 @media (min-width: 768px) {
-  html, body {
-    overflow: auto;
-    height: auto;
-    min-height: 100vh;
-  }
   .container {
     max-width: 900px;
     margin: 0 auto;
-    min-height: 100vh;
   }
   .main-content {
     padding-bottom: 20px;
-  }
-  /* Table page: fixed height on desktop */
-  body.table-page {
-    overflow: hidden;
-    height: 100vh;
-  }
-  body.table-page .container {
-    height: 100vh;
-    overflow: hidden;
   }
 }
 

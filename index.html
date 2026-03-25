@@ -7,14 +7,19 @@
     <script src="app/js/mds.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
         body {
             background: radial-gradient(ellipse at center, #1a2a1a 0%, #0a0f0a 100%);
-            min-height: 100vh;
+            height: 100%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-family: 'Georgia', serif;
             color: #f0e6c8;
+            overflow-y: auto;
         }
         .splash {
             text-align: center;
