@@ -34,7 +34,7 @@ function renderTableList() {
     for (var i = 0; i < tables.length; i++) {
         (function(table) {
             var tableId     = table.TABLEID     || table.tableId;
-            var maxPlayers  = table.MAXPLAYERS  || table.maxPlayers  || '4';
+            var maxPlayers  = table.MAXPLAYERS  || table.maxPlayers  || '2';
             var blinds      = table.BLINDS      || table.blinds      || '10/20';
             var buyIn       = table.BUYIN       || table.buyIn       || '1000';
             var creatorName = table.CREATORNAME || table.creatorName || '';
@@ -101,11 +101,11 @@ function createTable() {
         pokerModal.alert('Wallet not initialized. Please wait and try again.', 'error');
         return;
     }
-    pokerModal.prompt('Max players (2-4):', '4', function(maxPlayers) {
+    pokerModal.prompt('Max players (2):', '2', function(maxPlayers) {
         if (!maxPlayers) return;
         var n = parseInt(maxPlayers);
-        if (isNaN(n) || n < 2 || n > 4) {
-            pokerModal.alert('Max players must be 2–4', 'error');
+        if (isNaN(n) || n !== 2) {
+            pokerModal.alert('Max players must be 2', 'error');
             return;
         }
         pokerModal.prompt('Blinds (e.g. "10/20"):', '10/20', function(blinds) {

@@ -290,8 +290,8 @@ var tableUI = {
             pokerModal.alert('Need at least 2 players to create a channel', 'error');
             return;
         }
-        if (this.players.length > 4) {
-            pokerModal.alert('Channels support max 4 players', 'error');
+        if (this.players.length > 2) {
+            pokerModal.alert('Channels support max 2 players', 'error');
             return;
         }
         var self = this;
