@@ -596,17 +596,28 @@ var tableUI = {
 
     closeChannelCooperative: function() {
         if (!this.channelInfo) { pokerModal.alert('No channel to close', 'error'); return; }
+        var round = this.gameState ? this.gameState.round : 'waiting';
+        var duringGame = round && round !== 'waiting' && round !== 'finished';
         var self = this;
-        sql.getChannelByTable(self.tableId, function(row) {
-            if (!row) { pokerModal.alert('Channel not found', 'error'); return; }
-            var chan = channel.fromRow(row);
-            if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
-            chan.closeCooperative(function(err) {
-                if (err) { pokerModal.alert('Close failed: ' + err, 'error'); return; }
-                self._clearTimers();
-                self.loadChannelInfo();
+        var doClose = function() {
+            sql.getChannelByTable(self.tableId, function(row) {
+                if (!row) { pokerModal.alert('Channel not found', 'error'); return; }
+                var chan = channel.fromRow(row);
+                if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
+                chan.closeCooperative(function(err) {
+                    if (err) { pokerModal.alert('Close failed: ' + err, 'error'); return; }
+                    self._clearTimers();
+                    self.loadChannelInfo();
+                });
             });
-        });
+        };
+        if (duringGame) {
+            pokerModal.confirm('⚠️ Game is in progress! Closing now will use the last signed settlement (may not reflect current hand). Continue?', function(ok) {
+                if (ok) doClose();
+            });
+        } else {
+            doClose();
+        }
     },
 
     startDispute: function() {
@@ -811,6 +822,30 @@ var tableUI = {
             $('#readyBtn').hide();
             $('#status').text('⚠️ A player is out of chips! Close the channel to collect funds.').css('color', '#f39c12');
             $('#closeChannelBtn').show();
+            return;
+        }
+        if (message.type === 'CLOSE_REQUEST_UI' && message.tableId === this.tableId) {
+            var self = this;
+            var round = self.gameState ? self.gameState.round : 'waiting';
+            var duringGame = round && round !== 'waiting' && round !== 'finished';
+            var promptMsg = duringGame
+                ? '⚠️ Opponent wants to close the channel DURING the game. Agree (funds split by last settlement) or Dispute?'
+                : 'Opponent wants to close the channel cooperatively. Agree?';
+            pokerModal.choice('Close Channel Request', promptMsg,
+                [{ label: '✅ Agree', value: 'agree' }, { label: '⚔️ Dispute', value: 'dispute' }],
+                function(choice) {
+                    if (choice === 'agree') {
+                        MDS.comms.solo(JSON.stringify({ type: 'CLOSE_REQUEST_CONFIRM', channelId: message.channelId, spendTx: message.spendTx, fromPubKey: message.fromPubKey }));
+                    } else {
+                        MDS.comms.solo(JSON.stringify({ type: 'CLOSE_REQUEST_REJECT', channelId: message.channelId, fromPubKey: message.fromPubKey }));
+                    }
+                }
+            );
+            return;
+        }
+        if (message.type === 'CLOSE_REJECTED' && message.tableId === this.tableId) {
+            pokerModal.alert('Close rejected by opponent. Dispute started on their side.', 'warning');
+            this.loadChannelInfo();
             return;
         }
         if (message.type === 'TABLE_DELETED' && message.tableId === this.tableId) {

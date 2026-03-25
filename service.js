@@ -225,7 +225,7 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1 };
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1, CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1 };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
@@ -584,7 +584,21 @@ var messageHandlers = {
     CLOSE_REQUEST: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('CLOSE_REQUEST: channel not found'); return; }
-            // Find our walletKey from participants
+            // Forward to browser for user confirmation
+            MDS.comms.solo(JSON.stringify({
+                type: 'CLOSE_REQUEST_UI',
+                channelId: message.channelId,
+                tableId: chan.tableId,
+                spendTx: message.spendTx,
+                fromPubKey: fromPubKey
+            }));
+        });
+    },
+
+    CLOSE_REQUEST_CONFIRM: function(message, fromPubKey) {
+        // User confirmed — now sign and post
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) { log('CLOSE_REQUEST_CONFIRM: channel not found'); return; }
             var myMaxKey = getMyMaximaKey();
             var myWalletKey = '';
             for (var i = 0; i < chan.participants.length; i++) {
@@ -594,20 +608,31 @@ var messageHandlers = {
                 }
             }
             if (!myWalletKey) myWalletKey = getMyWalletKey();
-            log('CLOSE_REQUEST: signing with walletKey=' + myWalletKey.substring(0, 20));
             signTxnAsync(message.spendTx, myWalletKey, function(err, signed) {
-                if (err) { log('CLOSE_REQUEST sign error: ' + err); return; }
-                postTxnAsync(signed, function(err, res) {
-                    if (err) { log('CLOSE_REQUEST post error: ' + err); return; }
-                    log('CLOSE_REQUEST: posted ok');
+                if (err) { log('CLOSE_REQUEST_CONFIRM sign error: ' + err); return; }
+                postTxnAsync(signed, function(err) {
+                    if (err) { log('CLOSE_REQUEST_CONFIRM post error: ' + err); return; }
                     chan.status = 'CLOSED';
                     sql.saveChannelSpendTx(chan.id, signed, function() {
                         channel.set(chan.id, chan);
-                        maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
+                        maxima.sendRaw(message.fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
                         MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
                         debouncedRefreshTable(chan.tableId);
                     });
                 });
+            });
+        });
+    },
+
+    CLOSE_REQUEST_REJECT: function(message, fromPubKey) {
+        // User rejected — notify initiator and start dispute
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) return;
+            maxima.sendRaw(message.fromPubKey, { type: 'CLOSE_REJECTED', channelId: chan.id, tableId: chan.tableId }, function() {});
+            // Start dispute to protect funds
+            chan.startDispute(function(dispErr) {
+                if (dispErr) { log('CLOSE_REQUEST_REJECT dispute error: ' + dispErr); return; }
+                MDS.comms.solo(JSON.stringify({ type: 'REFRESH_TABLE', tableId: chan.tableId }));
             });
         });
     },
