@@ -143,7 +143,7 @@ var SQL = {
                 // Keep channel in history — just clear tableId link
                 MDS.sql("UPDATE channels SET tableId='' WHERE tableId=" + id, function() {
                     // Trim history to 100 most recent
-                    MDS.sql("DELETE FROM channels WHERE hashId NOT IN (SELECT hashId FROM channels ORDER BY rowid DESC LIMIT 100)", function() {
+                    MDS.sql("DELETE FROM channels WHERE hashId NOT IN (SELECT hashId FROM channels ORDER BY createdAt DESC LIMIT 100)", function() {
                         self._invalidateCache('tables');
                         self._invalidateCache(tableId);
                         if (callback) callback();
@@ -155,7 +155,7 @@ var SQL = {
 
     getAllChannels: function(callback) {
         var self = this;
-        MDS.sql("SELECT * FROM channels ORDER BY rowid DESC LIMIT 100", function(res) {
+        MDS.sql("SELECT * FROM channels ORDER BY createdAt DESC LIMIT 100", function(res) {
             var rows = (res && res.status && res.rows) ? res.rows : [];
             callback(rows.map(function(r) { return self._parseChannelRow(r); }));
         });
