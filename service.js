@@ -474,10 +474,13 @@ var messageHandlers = {
     },
 
     FINISH_START_CHANNEL: function(message, fromPubKey) {
+        log('FINISH_START_CHANNEL received for channel: ' + message.channelId);
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for FINISH_START_CHANNEL: ' + message.channelId); return; }
+            log('FINISH_START_CHANNEL: signing funding tx');
             signTxnAsync(message.fundingTx, 'auto', function(err, signed) {
                 if (err) { log('FINISH_START_CHANNEL sign failed: ' + err); return; }
+                log('FINISH_START_CHANNEL: posting signed funding tx');
                 var txid = 'post_' + randomString();
                 MDS.cmd('txnimport id:' + txid + ' data:' + signed + ';txnpost id:' + txid + ' auto:false;txndelete id:' + txid, function(res) {
                     var postRes = Array.isArray(res) ? res[1] : null;
@@ -485,8 +488,10 @@ var messageHandlers = {
                         log('FINISH_START_CHANNEL: post failed: ' + JSON.stringify(postRes));
                         return;
                     }
+                    log('FINISH_START_CHANNEL: funding tx posted successfully, updating status to OPEN');
                     chan.status = 'OPEN';
                     sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
+                        log('FINISH_START_CHANNEL: channel status updated, sending CHANNEL_OPEN');
                         maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {});
                         debouncedRefreshTable(chan.tableId);
                     });
