@@ -582,23 +582,42 @@ Channel.prototype.createUpdateAsync = function(newBalances, gameState, callback)
  */
 Channel.prototype.closeCooperative = function(callback) {
     var self = this;
-    var totalSum = new Decimal(0);
-    for (var i = 0; i < self.participants.length; i++) {
-        totalSum = totalSum.plus(self.participants[i].amount);
+
+    // Calculate total from balances (most current) or fall back to initial deposits
+    var total;
+    var balancesValid = false;
+    if (self.balances && Object.keys(self.balances).length > 0) {
+        var bSum = new Decimal(0);
+        for (var bk in self.balances) {
+            if (self.balances.hasOwnProperty(bk)) bSum = bSum.plus(self.balances[bk]);
+        }
+        if (bSum.greaterThan(0)) { total = bSum.toString(); balancesValid = true; }
     }
-    var total = totalSum.toString();
+    if (!balancesValid) {
+        var initSum = new Decimal(0);
+        for (var pi = 0; pi < self.participants.length; pi++) initSum = initSum.plus(self.participants[pi].amount);
+        total = initSum.toString();
+    }
 
     var outputs = [];
-    var balanceSum = new Decimal(0);
-    for (var j = 0; j < self.participants.length; j++) {
-        var p = self.participants[j];
-        var amt = (self.balances && self.balances[p.pubKey]) ? self.balances[p.pubKey] : '0';
-        balanceSum = balanceSum.plus(amt);
-        outputs.push({ address: p.address, amount: amt });
+    if (balancesValid) {
+        // Map balances to participant addresses (case-insensitive key match)
+        for (var j = 0; j < self.participants.length; j++) {
+            var p = self.participants[j];
+            var amt = '0';
+            for (var bk2 in self.balances) {
+                if (self.balances.hasOwnProperty(bk2) && bk2.toLowerCase() === (p.pubKey || '').toLowerCase()) {
+                    amt = self.balances[bk2];
+                    break;
+                }
+            }
+            if (new Decimal(amt).greaterThan(0)) {
+                outputs.push({ address: p.address, amount: amt });
+            }
+        }
     }
-    // If balances don't add up to total, fall back to initial deposits
-    if (!balanceSum.equals(new Decimal(total))) {
-        outputs = [];
+    // Fallback: split by initial deposits
+    if (outputs.length === 0) {
         for (var fb = 0; fb < self.participants.length; fb++) {
             outputs.push({ address: self.participants[fb].address, amount: self.participants[fb].amount });
         }

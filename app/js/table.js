@@ -598,10 +598,17 @@ var tableUI = {
         var duringGame = round && round !== 'waiting' && round !== 'finished';
         var self = this;
         var doClose = function() {
+            // Re-fetch channel from DB to get latest balances (avoid race with REPLY_SEND_FUNDS)
             sql.getChannelByTable(self.tableId, function(row) {
                 if (!row) { pokerModal.alert('Channel not found', 'error'); return; }
                 var chan = channel.fromRow(row);
                 if (!chan) { pokerModal.alert('Channel data unavailable', 'error'); return; }
+                // Merge in-memory channelInfo balances if more recent (higher sequence)
+                var infoSeq = parseInt(self.channelInfo.sequence || self.channelInfo.SEQUENCE || 0);
+                var rowSeq  = parseInt(row.sequence || 0);
+                if (self.channelInfo.balances && infoSeq >= rowSeq) {
+                    chan.balances = self.channelInfo.balances;
+                }
                 chan.closeCooperative(function(err) {
                     if (err) { pokerModal.alert('Close failed: ' + err, 'error'); return; }
                     self._clearTimers();
