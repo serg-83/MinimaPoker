@@ -1295,18 +1295,21 @@ body.table-page {
 #game {
     position: absolute;
     inset: 0;
+    bottom: 60px; /* leave room for controls bar */
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
-    overflow: visible;
+    padding: 8px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* ===== POKER TABLE ===== */
 .poker-table {
     position: relative;
-    width: min(92vw, 1100px);
-    height: min(calc(100vh - 80px), 650px);
+    width: clamp(320px, 92vw, 1100px);
+    height: clamp(220px, calc(100vh - 120px), 650px);
+    flex-shrink: 0;
     background: #2a5a3a;
     border-radius: 50%;
     box-shadow: 0 20px 40px rgba(0,0,0,0.6), inset 0 0 40px rgba(212, 175, 55, 0.25);
