@@ -36,12 +36,19 @@ app/js/
   channel.js    — Payment channel: open / update / close / independent close
   poker.js      — Texas Hold'em game logic (blinds, betting rounds, showdown)
   table.js      — Table UI rendering (seats, cards, pot, channel status)
+  lobby.js      — Lobby UI logic (table list, create/join/delete tables)
   maxima.js     — Maxima send/receive wrapper
+  mds.js        — MDS (Minima Data Service) API wrapper
   sql.js        — Local SQLite DB (tables, players, channel state)
   modal.js      — UI modals (alert / confirm / prompt / choice)
   wallet.js     — Balance, keys, coin management
+  crypto.js     — Cryptographic functions (hashing, signatures, seeds)
+  decimal.js    — Arbitrary-precision decimal arithmetic library
+  utils.js      — Utilities (ID generation, shuffling, validation)
+  tooltips.js   — UI tooltips and help text
 app/css/
-  style.css     — All styles (table, lobby, splash, modals)
+  style.css     — Global styles (lobby, splash, modals)
+  table.css     — Poker table specific styles
 ```
 
 ---
