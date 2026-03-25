@@ -119,6 +119,15 @@ body {
 
 .lobby-btn:active { transform: translateY(2px); box-shadow: 0 3px 8px rgba(212,175,55,0.2); }
 
+.lobby-tables-section {
+  margin-top: 20px;
+  padding: 16px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(212,175,55,0.2);
+  border-radius: 16px;
+  min-height: 60px;
+}
+
 /* Sidebar styles */
 #sidebar-contacts, #sidebar-tables, .sidebar {
   width: 300px;
