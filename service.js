@@ -13,6 +13,8 @@ var myMaximaKey  = '';
 var myWalletKey  = '';
 var myMaximaName = '';
 var pendingUpdates = {};
+var readyPlayers  = {};
+
 
 // Eltoo timing constants (matching thunder protocol)
 var MIN_UPDATE_COINAGE  = 5;
@@ -37,6 +39,16 @@ function refreshTable(tableId) { MDS.comms.solo(JSON.stringify({ type: 'REFRESH_
 // Rhino has no setTimeout — call directly
 function debouncedRefreshLobby() { refreshLobby(); }
 function debouncedRefreshTable(tableId) { refreshTable(tableId); }
+
+function broadcastToTable(tableId, msg) {
+    sql.getPlayers(tableId, function(players) {
+        if (!players) return;
+        for (var i = 0; i < players.length; i++) {
+            var pk = players[i].PLAYERPUBKEY || players[i].playerPubKey;
+            if (pk && pk !== myMaximaKey) maxima.sendRaw(pk, msg, function() {});
+        }
+    });
+}
 
 // Load channel from memory cache or DB
 function getChannel(channelId, callback) {
@@ -213,7 +225,7 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1 };
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1 };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
@@ -304,6 +316,37 @@ var messageHandlers = {
             if (row && (row.STATUS || row.status) === 'CLOSED') { log('GAME_START ignored: channel CLOSED'); return; }
             poker.initGame(message.tableId, message.channelId, message.players, message.blinds, function() {
                 debouncedRefreshTable(message.tableId);
+            });
+        });
+    },
+
+    PLAYER_READY: function(message, fromPubKey) {
+        var tableId = message.tableId;
+        var pubKey  = message.pubKey || fromPubKey;
+        if (!readyPlayers[tableId]) readyPlayers[tableId] = {};
+        readyPlayers[tableId][pubKey] = true;
+        sql.getPlayers(tableId, function(players) {
+            if (!players || players.length < 2) return;
+            // Check all players ready
+            for (var i = 0; i < players.length; i++) {
+                if (!readyPlayers[tableId][players[i].playerPubKey || players[i].PLAYERPUBKEY]) return;
+            }
+            // All ready — start next hand
+            readyPlayers[tableId] = {};
+            var game = poker.getGame(tableId);
+            if (!game || game.round !== 'finished') return;
+            sql.getChannelByTable(tableId, function(row) {
+                if (!row || (row.STATUS || row.status) === 'CLOSED') return;
+                var channelId = row.HASHID || row.hashId;
+                var playersWithStack = players.map(function(p) {
+                    var pk = p.PLAYERPUBKEY || p.playerPubKey;
+                    var bal = game.players.filter(function(gp) { return gp.pubKey === pk; })[0];
+                    return { pubKey: pk, name: p.PLAYERNAME || p.playerName || '', address: p.ADDRESS || p.address, initialStack: bal ? parseInt(bal.stack.toString()) : 1000 };
+                });
+                var parts = (row.BLINDS || row.blinds || '10/20').split('/');
+                var gameMsg = { type: 'GAME_START', tableId: tableId, channelId: channelId, players: playersWithStack, blinds: { small: parts[0], big: parts[1] } };
+                MDS.comms.solo(JSON.stringify(gameMsg));
+                broadcastToTable(tableId, gameMsg);
             });
         });
     },

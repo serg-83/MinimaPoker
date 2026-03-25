@@ -18,6 +18,7 @@ var tableUI = {
     _turnTimer:      null,
     _phaseTimer:     null,
     _disputePoller:  null,
+    _readyPlayers:   {},
     TURN_TIMEOUT:    60000,
     PHASE_TIMEOUT:   40000,
 
@@ -102,21 +103,13 @@ var tableUI = {
             }
             if (state.round !== 'reveal' && state.round !== 'commit') { self._revealSent = false; }
 
-            // Show winner and auto-start next hand
+            // Show winner notification and wait for ready
             if (state.round === 'finished' && (!oldState || oldState.round !== 'finished') && !self._nextHandScheduled) {
                 self._nextHandScheduled = true;
                 self._markDirty('phase');
-                if (self._isEnforcer()) {
-                    setTimeout(function() {
-                        self._nextHandScheduled = false;
-                        // Don't start new hand if channel is closed
-                        var status = self.channelInfo ? (self.channelInfo.status || self.channelInfo.STATUS) : null;
-                        if (status === 'CLOSED') return;
-                        self._autoStartGame();
-                    }, 4000);
-                }
+                self._showHandResult(state);
             }
-            if (state.round === 'commit') { self._nextHandScheduled = false; }
+            if (state.round === 'commit') { self._nextHandScheduled = false; self._readyPlayers = {}; }
 
             // Start timeout timers (host enforces)
             var prevRound = oldState ? oldState.round : null;
@@ -184,38 +177,19 @@ var tableUI = {
         } else if (round === 'reveal') {
             msg = 'Revealing secrets... (' + (this._revealSent ? 'revealed' : 'sending...') + ')';
         } else if (round === 'finished') {
-            var winners = [];
-            try { winners = JSON.parse(this.gameState.lastaction || this.gameState.lastAction || '[]'); } catch(e) {}
-            var winText = '';
-            if (Array.isArray(winners) && winners.length > 0) {
-                for (var wi = 0; wi < winners.length; wi++) {
-                    var wn = winners[wi];
-                    var name = wn.name || (wn.pubKey ? wn.pubKey.substring(0, 8) + '...' : '?');
-                    winText += name + ' wins ' + wn.amount + ' (' + wn.desc + ') ';
-                }
-            } else {
-                winText = 'Hand finished';
-            }
-            var bb = this.channelInfo ? parseInt((this.channelInfo.blinds || '10/20').split('/')[1] || 20) : 20;
-            var bustPlayer = null;
-            if (this.channelInfo && this.channelInfo.balances) {
-                for (var bi = 0; bi < (this.players || []).length; bi++) {
-                    var pk = this.players[bi].playerPubKey;
-                    if (parseInt(this.channelInfo.balances[pk] || 0) <= bb) {
-                        bustPlayer = this.players[bi].playerName || pk.substring(0,8) + '...';
-                        break;
-                    }
-                }
-            }
-            msg = '🏆 ' + winText.trim();
-            if (bustPlayer) msg += ' ⚠️ ' + bustPlayer + ' is out of chips!';
             $('#closeChannelBtn').show();
+            $('#readyBtn').show();
+            // status text set by _showHandResult on transition
         } else {
             $('#closeChannelBtn').hide();
         }
         if (round !== 'commit' && round !== 'reveal') {
             $('#commitBtn').hide();
             $('#revealBtn').hide();
+        }
+        if (round !== 'finished') {
+            $('#readyBtn').hide().prop('disabled', false).text('▶ Next Hand');
+            $('#status').text('').css('color', '');
         }
         $('#phaseMsg').text(msg);
     },
@@ -737,6 +711,7 @@ var tableUI = {
         $('#checkBtn').click(function() { tableUI.sendAction('check'); });
         $('#commitBtn').click(function() { tableUI.sendCommit(); });
         $('#revealBtn').click(function() { tableUI.sendReveal(); });
+        $('#readyBtn').click(function() { tableUI.sendReady(); });
         $('#closeChannelBtn').click(function() { tableUI.closeChannelCooperative(); });
         $('#createChannelBtn').click(function() { tableUI.createChannel(); });
         $('#closeChannelBtn2').click(function() { tableUI.showCloseChannelDialog(); });
@@ -762,7 +737,30 @@ var tableUI = {
         setTimeout(function() { self._actionPending = false; }, 10000);
     },
 
-    _disableActionButtons: function() {
+    _showHandResult: function(state) {
+        var winners = [];
+        try { winners = JSON.parse(state.lastaction || state.lastAction || '[]'); } catch(e) {}
+        var myKey = window.myMaximaKey;
+        var iWon = false;
+        var myAmount = 0;
+        for (var i = 0; i < winners.length; i++) {
+            if (winners[i].pubKey === myKey) { iWon = true; myAmount = winners[i].amount; break; }
+        }
+        var msg = iWon
+            ? '🏆 You won ' + myAmount + '!'
+            : (winners.length > 0
+                ? '😔 You lost. ' + (winners[0].name || winners[0].pubKey.slice(0,8)) + ' wins ' + winners[0].amount
+                : 'Hand finished');
+        $('#status').text(msg).css('color', iWon ? '#4caf50' : '#f39c12');
+        $('#readyBtn').show();
+    },
+
+    sendReady: function() {
+        $('#readyBtn').prop('disabled', true).text('Waiting...');
+        var msg = { type: 'PLAYER_READY', tableId: this.tableId, pubKey: window.myMaximaKey };
+        MDS.comms.solo(JSON.stringify(msg));
+        this._sendToAllPlayers(msg, function() {});
+    },
         $('#foldBtn, #callBtn, #raiseBtn, #checkBtn').prop('disabled', true).css('opacity', '0.5');
     },
 
