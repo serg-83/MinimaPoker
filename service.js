@@ -225,7 +225,7 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1 };
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1 };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
@@ -327,23 +327,38 @@ var messageHandlers = {
         readyPlayers[tableId][pubKey] = true;
         sql.getPlayers(tableId, function(players) {
             if (!players || players.length < 2) return;
-            // Check all players ready
             for (var i = 0; i < players.length; i++) {
-                if (!readyPlayers[tableId][players[i].playerPubKey || players[i].PLAYERPUBKEY]) return;
+                if (!readyPlayers[tableId][players[i].PLAYERPUBKEY || players[i].playerPubKey]) return;
             }
-            // All ready — start next hand
             readyPlayers[tableId] = {};
             var game = poker.getGame(tableId);
             if (!game || game.round !== 'finished') return;
             sql.getChannelByTable(tableId, function(row) {
                 if (!row || (row.STATUS || row.status) === 'CLOSED') return;
                 var channelId = row.HASHID || row.hashId;
-                var playersWithStack = players.map(function(p) {
-                    var pk = p.PLAYERPUBKEY || p.playerPubKey;
-                    var bal = game.players.filter(function(gp) { return gp.pubKey === pk; })[0];
-                    return { pubKey: pk, name: p.PLAYERNAME || p.playerName || '', address: p.ADDRESS || p.address, initialStack: bal ? parseInt(bal.stack.toString()) : 1000 };
-                });
+                // Use channel balances as source of truth (survives restarts)
+                var chanBalances = {};
+                try { chanBalances = JSON.parse(row.BALANCES || row.balances || '{}'); } catch(e) {}
                 var parts = (row.BLINDS || row.blinds || '10/20').split('/');
+                var bb = parseInt(parts[1] || 20);
+                var playersWithStack = [];
+                var anyBust = false;
+                for (var j = 0; j < players.length; j++) {
+                    var pk = players[j].PLAYERPUBKEY || players[j].playerPubKey;
+                    // Prefer in-memory stack (most current), fall back to channel balance
+                    var gamePl = null;
+                    for (var k = 0; k < game.players.length; k++) {
+                        if (game.players[k].pubKey === pk) { gamePl = game.players[k]; break; }
+                    }
+                    var stack = gamePl ? parseInt(gamePl.stack.toString()) : parseInt(chanBalances[pk] || 0);
+                    if (stack < bb) { anyBust = true; }
+                    playersWithStack.push({ pubKey: pk, name: players[j].PLAYERNAME || players[j].playerName || '', address: players[j].ADDRESS || players[j].address, initialStack: stack });
+                }
+                if (anyBust) {
+                    // Notify table: someone is out of chips, must close channel
+                    MDS.comms.solo(JSON.stringify({ type: 'PLAYER_BUST', tableId: tableId }));
+                    return;
+                }
                 var gameMsg = { type: 'GAME_START', tableId: tableId, channelId: channelId, players: playersWithStack, blinds: { small: parts[0], big: parts[1] } };
                 MDS.comms.solo(JSON.stringify(gameMsg));
                 broadcastToTable(tableId, gameMsg);

@@ -807,6 +807,12 @@ var tableUI = {
     handleServiceMessage: function(message) {
         if (message.type === 'CHANNEL_REQUEST') { handleChannelRequest(message); return; }
         if (message.type === 'CHANNEL_DENIED') { pokerModal.alert('Channel request denied', 'error'); return; }
+        if (message.type === 'PLAYER_BUST' && message.tableId === this.tableId) {
+            $('#readyBtn').hide();
+            $('#status').text('⚠️ A player is out of chips! Close the channel to collect funds.').css('color', '#f39c12');
+            $('#closeChannelBtn').show();
+            return;
+        }
         if (message.type === 'TABLE_DELETED' && message.tableId === this.tableId) {
             pokerModal.alert('Table was deleted', 'warning');
             setTimeout(function() { goBackToLobby(); }, 1500);
