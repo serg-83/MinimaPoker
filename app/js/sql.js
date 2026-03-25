@@ -163,7 +163,7 @@ var SQL = {
 
     deleteChannel: function(channelId, callback) {
         var id = this._esc(channelId);
-        MDS.sql("DELETE FROM channels WHERE id=" + id, function(res) {
+        MDS.sql("DELETE FROM channels WHERE hashId=" + id, function(res) {
             if (callback) callback(res);
         });
     },
@@ -281,11 +281,15 @@ var SQL = {
         r.eltooAddress  = r.eltooaddress;
         r.tokenId       = r.tokenid;
         r.hashId        = r.hashid;
+        r.id            = r.hashid;   // alias for deleteChannel
         r.fundingTxId   = r.fundingtxid;
         r.disputeStartBlock = r.disputestartblock;
         r.fundingSpent  = r.fundingspent;
         r.payoutFound   = r.payoutfound;
         r.payoutAmount  = r.payoutamount;
+        r.spendTx       = r.spendtx   || '';
+        r.closedAt      = r.closedat  || 0;
+        r.createdAt     = r.createdat || 0;
         return r;
     },
 
