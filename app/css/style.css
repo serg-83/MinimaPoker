@@ -89,6 +89,36 @@ body {
   box-sizing: border-box;
 }
 
+.lobby-btn {
+  background: linear-gradient(135deg, #1a2a3a, #0a1a2a);
+  border: 2px solid var(--gold);
+  border-radius: 30px;
+  color: var(--gold);
+  font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 16px 24px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 5px 15px rgba(212, 175, 55, 0.2);
+  transition: all 0.2s;
+  box-sizing: border-box;
+}
+
+.lobby-btn:hover, .lobby-btn:active {
+  background: linear-gradient(135deg, #1e3a1e, #0f2a0f);
+  box-shadow: 0 8px 20px rgba(212, 175, 55, 0.35);
+  color: #fff;
+}
+
+.lobby-btn:active { transform: translateY(2px); box-shadow: 0 3px 8px rgba(212,175,55,0.2); }
+
 /* Sidebar styles */
 #sidebar-contacts, #sidebar-tables, .sidebar {
   width: 300px;
