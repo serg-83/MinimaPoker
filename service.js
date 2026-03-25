@@ -8,7 +8,7 @@ MDS.load('./app/js/maxima.js');
 MDS.load('./app/js/channel.js');
 MDS.load('./app/js/poker.js');
 
-var SHOW_LOGS = true;
+var SHOW_LOGS = false;
 var myMaximaKey  = '';
 var myWalletKey  = '';
 var myMaximaName = '';
@@ -102,7 +102,6 @@ function sendWithAckAsync(to, msg, callback) {
 // ===== MAIN INIT =====
 MDS.init(function(msg) {
     if (msg.event === 'inited') {
-        log('Service initialized');
         if (typeof sql === 'undefined') { log('ERROR: sql not available'); return; }
         sql.createTables(function() {
             initWallet(function(user) {
@@ -112,7 +111,6 @@ MDS.init(function(msg) {
                     myMaximaName = user.maximaName;
                 }
                 maxima.init();
-                log('Service ready');
             });
         });
 
@@ -210,7 +208,7 @@ MDS.init(function(msg) {
         if (!coin.spent) {
             var payoutHashId = coin.state ? coin.state['200'] : undefined;
             if (payoutHashId === undefined) return;
-            var myAddr = (typeof currentUser !== 'undefined' && currentUser.minimaAddress) ? currentUser.minimaAddress : null;
+            var myAddr = myWalletKey || null;
             if (!myAddr || coin.miniaddress !== myAddr) return;
             sql.selectPayoutCoin(payoutHashId, function(res) {
                 if (!res || !res.count) return;
@@ -230,7 +228,6 @@ MDS.init(function(msg) {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
             if (commsMsg && commsMsg.type && allowedCommsTypes[commsMsg.type] && messageHandlers[commsMsg.type]) {
-                log('MDSCOMMS dispatch: type=' + commsMsg.type);
                 messageHandlers[commsMsg.type](commsMsg, myMaximaKey);
             }
         } catch(e) { log('MDSCOMMS parse error: ' + e); }
@@ -253,7 +250,6 @@ var messageHandlers = {
     },
 
     TABLE_CREATE: function(message, fromPubKey) {
-        log('TABLE_CREATE received: ' + (message.table ? message.table.tableId : 'no tableId'));
         sql.getTableById(message.table.tableId, function(existing) {
             if (existing) { debouncedRefreshLobby(); return; }
             if (!message.table.creatorName) message.table.creatorName = '';
@@ -397,13 +393,10 @@ var messageHandlers = {
             var totalAmount = new Decimal(0);
             // If chan.participants empty (DB load issue), use message participants
             var parts = (chan.participants && chan.participants.length > 0) ? chan.participants : (message.participants || []);
-            log('REQUEST_ACCEPTED: participants=' + JSON.stringify(parts) + ' fundingAddress=' + chan.fundingAddress);
             for (var i = 0; i < parts.length; i++) {
                 totalAmount = totalAmount.plus(parts[i].amount);
                 if (parts[i].pubKey === myKey) myAmount = parts[i].amount;
             }
-            log('REQUEST_ACCEPTED: totalAmount=' + totalAmount + ' myAmount=' + myAmount);
-            if (totalAmount.equals(0)) { log('REQUEST_ACCEPTED: totalAmount is 0, aborting'); return; }
             channel.createFundingTxn(chan.fundingAddress, myAmount, totalAmount.toString(), chan.tokenId, function(err, fundingHex) {
                 if (err) { log('createFundingTxn failed: ' + err); return; }
                 // Add scripts+MMR for our own inputs before sending to Player B
@@ -443,7 +436,6 @@ var messageHandlers = {
     },
 
     CREATE_CHANNEL: function(message, fromPubKey) {
-        log('CREATE_CHANNEL received for: ' + message.channelId);
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for CREATE_CHANNEL: ' + message.channelId); return; }
             chan.triggerTx    = message.triggerTx;
@@ -453,21 +445,17 @@ var messageHandlers = {
             for (var i = 0; i < chan.participants.length; i++) {
                 if (chan.participants[i].pubKey === myKey) { myAmount = chan.participants[i].amount; break; }
             }
-            log('CREATE_CHANNEL: myAmount=' + myAmount + ' myKey=' + myKey.substring(0,20));
             channel.addToFundingTxn(message.fundingTx, myAmount, chan.tokenId, function(err, fundingWithMyFunds) {
                 if (err) { log('addToFundingTxn failed: ' + err); return; }
-                log('CREATE_CHANNEL: addToFundingTxn ok, adding scripts+MMR');
                 var mmrId = 'mmr_' + randomString();
                 MDS.cmd('txnimport id:' + mmrId + ' data:' + fundingWithMyFunds + ';txnscript id:' + mmrId + ' auto:true;txnmmr id:' + mmrId + ';txnexport id:' + mmrId + ';txndelete id:' + mmrId, function(mmrResp) {
                     var fundingMmr = (mmrResp && Array.isArray(mmrResp) && mmrResp[3] && mmrResp[3].response && mmrResp[3].response.data) ? mmrResp[3].response.data : fundingWithMyFunds;
-                    log('CREATE_CHANNEL: signing trigger/settle');
                     signTxnAsync(chan.triggerTx, 'auto', function(err, trigger) {
                         if (err) { log('CREATE_CHANNEL sign trigger failed: ' + err); return; }
                         signTxnAsync(chan.settlementTx, 'auto', function(err, settle) {
                             if (err) { log('CREATE_CHANNEL sign settle failed: ' + err); return; }
                             signTxnAsync(fundingMmr, 'auto', function(err, funding) {
                                 if (err) { log('CREATE_CHANNEL sign funding failed: ' + err); return; }
-                                log('CREATE_CHANNEL: all signed, sending FINISH_START_CHANNEL');
                                 chan.triggerTx    = trigger;
                                 chan.settlementTx = settle;
                                 chan.fundingTx    = funding;
@@ -486,13 +474,10 @@ var messageHandlers = {
     },
 
     FINISH_START_CHANNEL: function(message, fromPubKey) {
-        log('FINISH_START_CHANNEL received for: ' + message.channelId);
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('Channel not found for FINISH_START_CHANNEL: ' + message.channelId); return; }
-            log('FINISH_START_CHANNEL: signing funding tx');
             signTxnAsync(message.fundingTx, 'auto', function(err, signed) {
                 if (err) { log('FINISH_START_CHANNEL sign failed: ' + err); return; }
-                log('FINISH_START_CHANNEL: posting funding tx (auto:false, MMR already set by both parties)');
                 var txid = 'post_' + randomString();
                 MDS.cmd('txnimport id:' + txid + ' data:' + signed + ';txnpost id:' + txid + ' auto:false;txndelete id:' + txid, function(res) {
                     var postRes = Array.isArray(res) ? res[1] : null;
@@ -500,7 +485,6 @@ var messageHandlers = {
                         log('FINISH_START_CHANNEL: post failed: ' + JSON.stringify(postRes));
                         return;
                     }
-                    log('FINISH_START_CHANNEL post result: ' + JSON.stringify(postRes));
                     chan.status = 'OPEN';
                     sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
                         maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {});
@@ -571,7 +555,9 @@ var messageHandlers = {
 
     CHANNEL_CLOSE: function(message, fromPubKey) {
         sql.getChannelByTable(message.tableId, function(row) {
-            if (row) sql.updateChannelAfterFunding(row.hashId, null, 'CLOSED', null, function() {
+            if (!row) return;
+            var id = row.hashId || row.hashid || row.HASHID;
+            sql.updateChannelAfterFunding(id, null, 'CLOSED', null, function() {
                 debouncedRefreshTable(message.tableId);
             });
         });

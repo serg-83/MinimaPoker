@@ -77,14 +77,6 @@ function trackScript(script, callback) {
  * @param {string} address - the address to stop tracking
  * @param {function} callback - optional
  */
-function removeScript(address, callback) {
-    MDS.cmd('removescript address:' + address, function(resp) {
-        if (callback) {
-            callback(resp);
-        }
-    });
-}
-
 // ==================== Transaction Creation (MDS commands) ====================
 
 /**
@@ -527,35 +519,6 @@ Channel.prototype.init = function(callback) {
 
 /**
  * Sign the initial trigger and settlement with our own key (called by each participant).
- * @param {string} pubKey - our public key
- * @param {function} callback - called with (err, signedTrigger, signedSettlement)
- */
-Channel.prototype.signInitial = function(pubKey, callback) {
-    var self = this;
-    signTxn(self.triggerTx, pubKey, function(err1, signedTrigger) {
-        if (err1) {
-            callback(err1, null, null);
-            return;
-        }
-        signTxn(self.settlementTx, pubKey, function(err2, signedSettlement) {
-            if (err2) {
-                callback(err2, null, null);
-            } else {
-                callback(null, signedTrigger, signedSettlement);
-            }
-        });
-    });
-};
-
-/**
- * Sign the funding transaction with 'auto' (uses wallet's key).
- * @param {string} fundingHex - unsigned funding tx
- * @param {function} callback - called with (err, signedFundingTx)
- */
-Channel.signFunding = function(fundingHex, callback) {
-    signTxn(fundingHex, 'auto', callback);
-};
-
 // --- State updates (off‑chain payments) ---
 
 /**
@@ -610,19 +573,6 @@ Channel.prototype.createUpdateAsync = function(newBalances, gameState, callback)
 };
 
 /**
- * Apply a signed update after collecting signatures.
- * @param {Object} update - { settlementTx, updateTx, sequence, balances, signatures }
- */
-Channel.prototype.applyUpdate = function(update) {
-    this.settlementTx = update.settlementTx;
-    this.updateTx = update.updateTx;
-    this.sequence = update.sequence;
-    this.balances = update.balances;
-    this.signatures.lastUpdate = update.signatures;
-    // Save to DB
-    sql.updateChannelStateWithSignatures(this.id, this.balances, update.gameState || {}, this.sequence, this.signatures, function() {});
-};
-
 // --- Closing ---
 
 /**
@@ -845,7 +795,7 @@ var _channelExport = {
     prepareTxn: prepareTxn,
     postTxn: postTxn,
     trackScript: trackScript,
-    removeScript: removeScript,
+    removeScript: undefined,
     buildFundingScript: buildFundingScript,
     buildEltooScript: buildEltooScript,
     fromRow: Channel.fromRow,

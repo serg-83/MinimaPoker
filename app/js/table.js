@@ -162,10 +162,6 @@ var tableUI = {
         this._dirtyComponents = {};
     },
 
-    renderWaiting: function() {
-        $('#seats').html('<div class="loading">Waiting for players to join...</div>');
-    },
-
     renderPhaseControls: function() {
         if (!this.gameState) return;
         var round = this.gameState.round;
@@ -362,14 +358,6 @@ var tableUI = {
                 if (!ok) MDS.log('Auto-start game failed, will retry on next channel update');
             });
         });
-    },
-
-    startGame: function() {
-        if (!this.channelInfo || (this.channelInfo.status || this.channelInfo.STATUS) !== 'OPEN') {
-            pokerModal.alert('Channel not open yet', 'error');
-            return;
-        }
-        this._autoStartGame();
     },
 
     renderSeats: function() {
@@ -782,6 +770,8 @@ var tableUI = {
         MDS.comms.solo(JSON.stringify(msg));
         this._sendToAllPlayers(msg, function() {});
     },
+
+    _disableActionButtons: function() {
         $('#foldBtn, #callBtn, #raiseBtn, #checkBtn').prop('disabled', true).css('opacity', '0.5');
     },
 

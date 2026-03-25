@@ -255,13 +255,6 @@ var SQL = {
             " WHERE hashId=" + this._esc(channelId), callback);
     },
 
-    updateChannelStateWithSignatures: function(channelId, balances, gameState, sequence, signatures, callback) {
-        MDS.sql("UPDATE channels SET balances=" + this._esc(JSON.stringify(balances)) +
-            ",lastGameState=" + this._esc(JSON.stringify(gameState)) +
-            ",sequence=" + sequence + ",signatures=" + this._esc(JSON.stringify(signatures)) +
-            " WHERE hashId=" + this._esc(channelId), callback);
-    },
-
     updateChannelAfterUpdate: function(channelId, settlementTx, updateTx, balances, gameState, sequence, callback) {
         MDS.sql("UPDATE channels SET settlementTx=" + this._esc(settlementTx) +
             ",updateTx=" + this._esc(updateTx) +
