@@ -657,10 +657,10 @@ var messageHandlers = {
                 return;
             }
 
-            // Close channel cooperatively
-            chan.closeCooperative(function(closeErr) {
+            // Close channel independently - each player posts their latest settlement
+            chan.closeIndependent(function(closeErr) {
                 if (closeErr) {
-                    log('GAME_END_AUTO_CLOSE: close failed: ' + closeErr);
+                    log('GAME_END_AUTO_CLOSE: independent close failed: ' + closeErr);
                     return;
                 }
 

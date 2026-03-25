@@ -665,6 +665,37 @@ Channel.prototype.closeCooperative = function(callback) {
     });
 };
 
+/**
+ * Close channel independently: post our existing settlementTx without coordination.
+ * Each player posts their own fully signed settlement transaction.
+ * @param {function} callback - called with (err, txid)
+ */
+Channel.prototype.closeIndependent = function(callback) {
+    var self = this;
+
+    if (!self.settlementTx) {
+        callback('No settlement transaction available', null);
+        return;
+    }
+
+    // Simply post the existing settlement transaction (auto:true adds MMR proofs)
+    postTxn(self.settlementTx, function(err, res) {
+        if (err) {
+            callback(err, null);
+            return;
+        }
+
+        var txid = res && res.response ? res.response.txid : null;
+        if (txid) {
+            // Update channel status to closed
+            self.status = 'CLOSED';
+            sql.updateChannelAfterFunding(self.id, null, 'CLOSED', null, function() {});
+        }
+
+        callback(null, txid);
+    });
+};
+
 Channel.prototype._createSpendFundingTxn = function(total, outputs, callback) {
     var self = this;
     var txid = randomString();
