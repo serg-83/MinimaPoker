@@ -367,7 +367,7 @@ var SQL = {
     },
 
     updateFundingSpent: function(hashId, callback) {
-        MDS.sql("UPDATE channels SET fundingSpent=1, status='START_CLOSE' WHERE hashId=" + this._esc(hashId), function(res) {
+        MDS.sql("UPDATE channels SET fundingSpent=1, status='CLOSING' WHERE hashId=" + this._esc(hashId), function(res) {
             if (callback) callback(res);
         });
     },
