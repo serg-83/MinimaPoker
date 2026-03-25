@@ -390,9 +390,17 @@
         });
 
         function showChannelHistory() {
+            if (typeof sql === 'undefined' || !sql.getAllChannels) {
+                pokerModal.alert('SQL not ready', 'error'); return;
+            }
             sql.getAllChannels(function(channels) {
+                MDS.log('Channel history: found ' + (channels ? channels.length : 0) + ' channels');
                 if (!channels || channels.length === 0) {
-                    pokerModal.alert('No channels found.', 'info');
+                    // Try raw query to debug
+                    MDS.sql('SELECT COUNT(*) AS CNT FROM channels', function(r) {
+                        var cnt = r && r.rows && r.rows[0] ? (r.rows[0].CNT || r.rows[0].cnt || 0) : 0;
+                        pokerModal.alert('No channels found. (DB count: ' + cnt + ')', 'info');
+                    });
                     return;
                 }
                 var html = '<div style="max-height:60vh;overflow-y:auto;font-size:0.85rem">';
