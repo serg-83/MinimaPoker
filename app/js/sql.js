@@ -47,7 +47,7 @@ var SQL = {
                 'id INTEGER AUTO_INCREMENT PRIMARY KEY, tableId TEXT, channelId TEXT, ' +
                 'players TEXT, winner TEXT, winnerName TEXT, pot TEXT, ' +
                 'settlementTx TEXT, fundingTx TEXT, gameResult TEXT, ' +
-                'txStatus TEXT DEFAULT "pending", createdAt BIGINT, completedAt BIGINT)',
+                'txStatus TEXT DEFAULT \'pending\', createdAt BIGINT, completedAt BIGINT)',
             'CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)'
         ];
         var self = this;
