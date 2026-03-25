@@ -323,7 +323,7 @@ var messageHandlers = {
         // Don't start game if channel is closed
         sql.getChannelById(message.channelId, function(row) {
             if (row && (row.STATUS || row.status) === 'CLOSED') { log('GAME_START ignored: channel CLOSED'); return; }
-            poker.initGame(message.tableId, message.channelId, message.players, message.blinds, function() {
+            poker.initGame(message.tableId, message.channelId, message.players, message.blinds, message.buyIn, function() {
                 debouncedRefreshTable(message.tableId);
             });
         });
@@ -368,7 +368,7 @@ var messageHandlers = {
                     MDS.comms.solo(JSON.stringify({ type: 'PLAYER_BUST', tableId: tableId }));
                     return;
                 }
-                var gameMsg = { type: 'GAME_START', tableId: tableId, channelId: channelId, players: playersWithStack, blinds: { small: parts[0], big: parts[1] } };
+                var gameMsg = { type: 'GAME_START', tableId: tableId, channelId: channelId, players: playersWithStack, blinds: { small: parts[0], big: parts[1] }, buyIn: chan.buyIn || chan.BUYIN };
                 MDS.comms.solo(JSON.stringify(gameMsg));
                 broadcastToTable(tableId, gameMsg);
             });
@@ -716,30 +716,6 @@ var messageHandlers = {
             if (message.finalStacks) {
                 chan.balances = message.finalStacks;
             }
-
-            // Save game result to history before closing
-            MDS.log('[DEBUG GAME_END_AUTO_CLOSE] message: ' + JSON.stringify({winner: message.winner, winnerName: message.winnerName, pot: message.pot}));
-            sql.getGameState(message.tableId, function(gameState) {
-                var gameData = {
-                    tableId: message.tableId,
-                    channelId: message.channelId,
-                    players: chan.participants || [],
-                    winner: message.winner || '',
-                    winnerName: message.winnerName || '',
-                    pot: message.pot || '0',
-                    settlementTx: chan.settlementTx || '',
-                    fundingTx: chan.fundingTx || '',
-                    gameResult: message.gameResult || {},
-                    txStatus: 'pending'
-                };
-                MDS.log('[DEBUG GAME_END_AUTO_CLOSE] gameData: ' + JSON.stringify({winner: gameData.winner, winnerName: gameData.winnerName, pot: gameData.pot}));
-
-                sql.saveGameResult(gameData, function(saveRes) {
-                    if (saveRes && saveRes.status) {
-                        MDS.log('GAME_END_AUTO_CLOSE: game result saved to history');
-                    }
-                });
-            });
 
             // Close channel cooperatively with autoClose flag - one player creates and signs, other signs and posts automatically
             chan.closeCooperative(true, function(closeErr) {

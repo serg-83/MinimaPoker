@@ -43,11 +43,6 @@ var SQL = {
                 'playerCards TEXT, players TEXT, bets TEXT, turn INTEGER, lastAction TEXT, commits TEXT, reveals TEXT)',
             'CREATE TABLE IF NOT EXISTS logs (' +
                 'hashId TEXT, timestamp BIGINT, event TEXT, details TEXT)',
-            'CREATE TABLE IF NOT EXISTS game_history (' +
-                'id INTEGER AUTO_INCREMENT PRIMARY KEY, tableId TEXT, channelId TEXT, ' +
-                'players TEXT, winner TEXT, winnerName TEXT, pot TEXT, ' +
-                'settlementTx TEXT, fundingTx TEXT, gameResult TEXT, ' +
-                'txStatus TEXT DEFAULT \'pending\', createdAt BIGINT, completedAt BIGINT)',
             'CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)'
         ];
         var self = this;
@@ -439,49 +434,6 @@ var SQL = {
         MDS.sql("SELECT * FROM logs WHERE hashId=" + this._esc(hashId) + " ORDER BY timestamp DESC", function(res) {
             callback((res && res.status && res.rows) ? res.rows : []);
         });
-    },
-
-    // ===== GAME HISTORY =====
-
-    saveGameResult: function(gameData, callback) {
-        var sql = 'INSERT INTO game_history (tableId, channelId, players, winner, winnerName, pot, ' +
-                  'settlementTx, fundingTx, gameResult, txStatus, createdAt, completedAt) VALUES (' +
-                  this._esc(gameData.tableId) + ',' + this._esc(gameData.channelId) + ',' +
-                  this._esc(JSON.stringify(gameData.players || [])) + ',' +
-                  this._esc(gameData.winner || '') + ',' + this._esc(gameData.winnerName || '') + ',' +
-                  this._esc(gameData.pot || '0') + ',' + this._esc(gameData.settlementTx || '') + ',' +
-                  this._esc(gameData.fundingTx || '') + ',' + this._esc(JSON.stringify(gameData.gameResult || {})) + ',' +
-                  this._esc(gameData.txStatus || 'pending') + ',' + Math.floor(Date.now()/1000) + ',' +
-                  (gameData.completedAt ? Math.floor(gameData.completedAt/1000) : 'NULL') + ')';
-
-        var self = this;
-        MDS.sql(sql, function(res) {
-            // Keep only last 100 games
-            self._cleanupGameHistory(function() {
-                if (callback) callback(res);
-            });
-        });
-    },
-
-    getGameHistory: function(limit, callback) {
-        if (typeof limit === 'function') { callback = limit; limit = 50; }
-        var sql = 'SELECT * FROM game_history ORDER BY createdAt DESC LIMIT ' + (limit || 50);
-        MDS.sql(sql, function(res) {
-            if (callback) callback(res && res.status ? res.rows : []);
-        });
-    },
-
-    updateGameTxStatus: function(gameId, status, callback) {
-        var sql = 'UPDATE game_history SET txStatus=' + this._esc(status) +
-                  ', completedAt=' + Math.floor(Date.now()/1000) + ' WHERE id=' + parseInt(gameId);
-        MDS.sql(sql, callback);
-    },
-
-    _cleanupGameHistory: function(callback) {
-        // Keep only last 100 games
-        var sql = 'DELETE FROM game_history WHERE id NOT IN (' +
-                  'SELECT id FROM game_history ORDER BY createdAt DESC LIMIT 100)';
-        MDS.sql(sql, callback);
     }
 };
 

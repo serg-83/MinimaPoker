@@ -8,9 +8,10 @@ var gamesMap = {};
 /**
  * Poker game constructor (ES5 version)
  */
-function PokerGame(tableId, players, blinds, channelId) {
+function PokerGame(tableId, players, blinds, channelId, buyIn) {
     this.tableId = tableId;
     this.channelId = channelId;           // associated payment channel
+    this.buyIn = new Decimal(buyIn || blinds.big);  // store buyIn for minRaise
     this.players = [];
     for (var i = 0; i < players.length; i++) {
         var p = players[i];
@@ -36,7 +37,7 @@ function PokerGame(tableId, players, blinds, channelId) {
     this.communityCards = [];
     this.round = 'waiting'; // waiting, commit, preflop, flop, turn, river, showdown
     this.lastAction = null;
-    this.minRaise = this.blinds.big;
+    this.minRaise = this.buyIn;  // minRaise equals buyIn (initial stack)
     this.seed = null;                      // final seed for deck
     this.commits = {};                      // commitments from players (by pubKey)
     this.reveals = {};                       // revealed secrets (by pubKey)
@@ -140,23 +141,6 @@ PokerGame.prototype._flushDbUpdate = function() {
 
             var sendGameEnd = function() {
                 if (typeof MDS !== 'undefined' && MDS.comms) {
-                    // Prepare game result data
-                    var winner = '';
-                    var winnerName = '';
-                    var potAmount = '0';
-
-                    MDS.log('[DEBUG sendGameEnd] lastWinners: ' + JSON.stringify(self.lastWinners));
-
-                    if (self.lastWinners && self.lastWinners.length > 0) {
-                        winner = self.lastWinners[0].pubKey || '';
-                        winnerName = self.lastWinners[0].name || '';
-                        // Get pot from winner's amount since self.pot is already reset to 0
-                        potAmount = self.lastWinners[0].amount || '0';
-                        MDS.log('[DEBUG sendGameEnd] winner=' + winner + ' winnerName=' + winnerName + ' pot=' + potAmount);
-                    } else {
-                        MDS.log('[DEBUG sendGameEnd] lastWinners is empty or undefined!');
-                    }
-
                     // Collect all players' final stacks
                     var finalStacks = {};
                     for (var i = 0; i < self.players.length; i++) {
@@ -170,10 +154,6 @@ PokerGame.prototype._flushDbUpdate = function() {
                         type: 'GAME_END_AUTO_CLOSE',
                         tableId: self.tableId,
                         channelId: self.channelId,
-                        winner: winner,
-                        winnerName: winnerName,
-                        pot: potAmount,
-                        gameResult: self.lastWinners || [],
                         finalStacks: finalStacks
                     }));
                 }
@@ -506,7 +486,7 @@ PokerGame.prototype.nextRound = function() {
         this.players[i].bet = new Decimal(0);
         this.players[i].acted = false;
     }
-    this.minRaise = this.blinds.big;
+    this.minRaise = this.buyIn;  // reset to buyIn after each round
 
     if (this.round === 'preflop') {
         this.round = 'flop';
@@ -975,8 +955,8 @@ PokerGame.prototype.getChannelState = function() {
  * Initialize a new poker game for a table.
  * This should be called after channel is created.
  */
-function initGame(tableId, channelId, players, blinds, callback) {
-    var game = new PokerGame(tableId, players, blinds, channelId);
+function initGame(tableId, channelId, players, blinds, buyIn, callback) {
+    var game = new PokerGame(tableId, players, blinds, channelId, buyIn);
     gamesMap[tableId] = game;
     // Start commit phase
     game.startCommitPhase();
