@@ -255,17 +255,11 @@ body.sidebar-tables-open .sidebar-overlay {
   position: absolute;
   top: 10px;
   right: 10px;
-  background: none;
-  border: none;
-  color: #c0392b;
-  font-size: 1.5rem;
-  cursor: pointer;
-  padding: 0 5px;
+  padding: 2px 8px;
+  font-size: 1rem;
 }
 
-.contact-delete:hover {
-  color: #e74c3c;
-}
+.contact-delete:hover { filter: brightness(1.2); }
 
 .contacts-loading, .contacts-empty, .contacts-error {
   text-align: center;

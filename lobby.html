@@ -176,7 +176,7 @@
                     html += '<div class="contact-item">' +
                         '<div class="contact-name">' + name + '</div>' +
                         '<div class="contact-address">' + short + '</div>' +
-                        '<button class="contact-delete" onclick="deleteContact(' + c.id + ')">&times;</button>' +
+                        '<button class="contact-delete danger btn-sm" data-contactid="' + c.id + '">&times;</button>' +
                         '</div>';
                 }
                 el.innerHTML = html;
@@ -380,8 +380,13 @@
 
             $('#manageContactsBtn').button().click(function() { toggleSidebar('contacts'); });
             $('#activeTablesBtn').button().click(function() { toggleSidebar('tables'); });
-
             $('#channelHistoryBtn').button().click(function() { showChannelHistory(); });
+
+            // Delegated: contact delete
+            $(document).on('click', '.contact-delete', function() {
+                var id = $(this).data('contactid');
+                if (id) deleteContact(id);
+            });
         });
 
         function showChannelHistory() {
