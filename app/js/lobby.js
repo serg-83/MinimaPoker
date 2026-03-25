@@ -213,6 +213,8 @@ function handleChannelRequest(data) {
         var chan = new channel.Channel(data.tableId, data.participants, data.tokenId || '0x00', data.timeout || 30);
         chan.id = data.channelId;
         chan.status = 'FUNDING';
+        chan.blinds = data.blinds || '10/20';
+        chan.buyIn = data.buyIn || '200';
         chan.init(function(err) {
             if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
             sql.insertChannelFull(chan, function(res) {

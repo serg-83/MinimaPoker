@@ -34,7 +34,8 @@ var SQL = {
                 'status TEXT, sequence INTEGER DEFAULT 0, timeout INTEGER, fundingTxId TEXT, ' +
                 'fundingSpent INTEGER DEFAULT 0, ' +
                 'payoutFound INTEGER DEFAULT 0, payoutAmount TEXT, createdAt BIGINT, ' +
-                'spendTx TEXT DEFAULT \'\', closedAt BIGINT DEFAULT 0)',
+                'spendTx TEXT DEFAULT \'\', closedAt BIGINT DEFAULT 0, ' +
+                'blinds TEXT DEFAULT \'10/20\', buyIn TEXT DEFAULT \'200\')',
             'CREATE TABLE IF NOT EXISTS channel_states (' +
                 'id INTEGER AUTO_INCREMENT PRIMARY KEY, channelId TEXT, sequence INTEGER, ' +
                 'state TEXT, signatures TEXT, createdAt BIGINT)',
@@ -228,14 +229,15 @@ var SQL = {
         var q = 'MERGE INTO channels (' +
             'hashId, tableId, fundingTx, triggerTx, settlementTx, updateTx, fundingAddress, eltooAddress, ' +
             'participants, balances, lastGameState, signatures, status, sequence, timeout, fundingTxId, ' +
-            'createdAt) KEY(hashId) VALUES (' +
+            'blinds, buyIn, createdAt) KEY(hashId) VALUES (' +
             this._esc(ch.id) + ',' + this._esc(ch.tableId) + ',' + this._esc(ch.fundingTx || '') + ',' +
             this._esc(ch.triggerTx || '') + ',' + this._esc(ch.settlementTx || '') + ',' + this._esc(ch.updateTx || '') + ',' +
             this._esc(ch.fundingAddress || '') + ',' + this._esc(ch.eltooAddress || '') + ',' +
             this._esc(JSON.stringify(ch.participants || [])) + ',' + this._esc(JSON.stringify(ch.balances || {})) + ',' +
             this._esc(JSON.stringify(ch.lastGameState || {})) + ',' + this._esc(JSON.stringify(ch.signatures || {})) + ',' +
             this._esc(ch.status || 'FUNDING') + ',' + (ch.sequence || 0) + ',' + (ch.timeoutBlocks || 0) + ',' +
-            this._esc(ch.fundingTxId || '') + ',' + Math.floor(Date.now()/1000) + ')';
+            this._esc(ch.fundingTxId || '') + ',' + this._esc(ch.blinds || '10/20') + ',' + this._esc(ch.buyIn || '200') + ',' +
+            Math.floor(Date.now()/1000) + ')';
         MDS.sql(q, callback);
     },
 

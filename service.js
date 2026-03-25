@@ -380,6 +380,8 @@ var messageHandlers = {
         var chan = new channel.Channel(message.tableId, message.participants, message.tokenId || '0x00', message.timeout || 30);
         chan.id = message.channelId;
         chan.status = 'FUNDING';
+        chan.blinds = message.blinds || '10/20';
+        chan.buyIn = message.buyIn || '200';
         chan.init(function(err) {
             if (err) { log('REQUEST_NEW_CHANNEL init failed: ' + err); }
             sql.insertChannelFull(chan, function() {

@@ -235,12 +235,14 @@ var tableUI = {
             }
             var chan = new channel.Channel(self.tableId, participants, '0x00', 30);
             chan.status = 'FUNDING';
+            chan.blinds = blinds;
+            chan.buyIn = buyIn;
             pokerModal.alert('Initializing channel scripts...', 'info');
             chan.init(function(err) {
                 if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
                 sql.insertChannelFull(chan, function(res) {
                     if (!res || !res.status) { pokerModal.alert('Failed to save channel to database', 'error'); return; }
-                    var msg = { type: 'REQUEST_NEW_CHANNEL', channelId: chan.id, tableId: self.tableId, participants: participants, tokenId: '0x00', timeout: 30 };
+                    var msg = { type: 'REQUEST_NEW_CHANNEL', channelId: chan.id, tableId: self.tableId, participants: participants, tokenId: '0x00', timeout: 30, blinds: blinds, buyIn: buyIn };
                     for (var j = 0; j < self.players.length; j++) {
                         (function(p) {
                             if (p.playerPubKey !== window.myMaximaKey) maxima.sendRaw(p.playerPubKey, msg, function() {});
@@ -566,12 +568,14 @@ var tableUI = {
             }
             var chan = new channel.Channel(self.tableId, participants, '0x00', 30);
             chan.status = 'FUNDING';
+            chan.blinds = blinds;
+            chan.buyIn = buyIn;
             pokerModal.alert('Initializing channel scripts...', 'info');
             chan.init(function(err) {
                 if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
                 sql.insertChannelFull(chan, function(res) {
                     if (!res || !res.status) { pokerModal.alert('Failed to save channel to database', 'error'); return; }
-                    var msg = { type: 'REQUEST_NEW_CHANNEL', channelId: chan.id, tableId: self.tableId, participants: participants, tokenId: '0x00', timeout: 30 };
+                    var msg = { type: 'REQUEST_NEW_CHANNEL', channelId: chan.id, tableId: self.tableId, participants: participants, tokenId: '0x00', timeout: 30, blinds: blinds, buyIn: buyIn };
                     for (var j = 0; j < self.players.length; j++) {
                         (function(p) {
                             if (p.playerPubKey !== window.myMaximaKey) maxima.sendRaw(p.playerPubKey, msg, function() {});
@@ -889,6 +893,8 @@ function handleChannelRequest(data) {
         var chan = new channel.Channel(data.tableId, data.participants, data.tokenId || '0x00', data.timeout || 30);
         chan.id = data.channelId;
         chan.status = 'FUNDING';
+        chan.blinds = data.blinds || '10/20';
+        chan.buyIn = data.buyIn || '200';
         chan.init(function(err) {
             if (err) { pokerModal.alert('Failed to init channel: ' + err, 'error'); return; }
             sql.insertChannelFull(chan, function(res) {
