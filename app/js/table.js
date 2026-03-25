@@ -296,8 +296,7 @@ var tableUI = {
                 tableId: self.tableId,
                 channelId: self.channelInfo.hashId || self.channelInfo.HASHID,
                 players: playersWithStack,
-                blinds: { small: parts[0], big: parts[1] },
-                buyIn: buyIn
+                blinds: { small: parts[0], big: parts[1] }
             };
             MDS.log('TABLE _autoStartGame: sending GAME_START message=' + JSON.stringify(gameMsg));
 
@@ -640,10 +639,9 @@ var tableUI = {
         $('#callBtn').click(function() { tableUI.sendAction('call'); });
         $('#raiseBtn').click(function() {
             var gs = tableUI.gameState;
-            var buyIn = tableUI.channelInfo ? (tableUI.channelInfo.buyIn || tableUI.channelInfo.BUYIN) : null;
             var blinds = tableUI.channelInfo ? (tableUI.channelInfo.blinds || tableUI.channelInfo.BLINDS || '10/20') : '10/20';
             var bb = parseInt(blinds.split('/')[1] || 20);
-            var minRaise = buyIn ? parseInt(buyIn) : bb;  // minRaise equals buyIn
+            var minRaise = bb;  // minRaise equals big blind
             // Calculate max raise (stack - amount needed to call)
             var currentBet = gs ? parseInt(gs.currentbet || gs.currentBet || 0) : 0;
             var myBet = 0;

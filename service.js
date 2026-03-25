@@ -323,7 +323,7 @@ var messageHandlers = {
         // Don't start game if channel is closed
         sql.getChannelById(message.channelId, function(row) {
             if (row && (row.STATUS || row.status) === 'CLOSED') { log('GAME_START ignored: channel CLOSED'); return; }
-            poker.initGame(message.tableId, message.channelId, message.players, message.blinds, message.buyIn, function() {
+            poker.initGame(message.tableId, message.channelId, message.players, message.blinds, function() {
                 debouncedRefreshTable(message.tableId);
             });
         });
@@ -368,7 +368,7 @@ var messageHandlers = {
                     MDS.comms.solo(JSON.stringify({ type: 'PLAYER_BUST', tableId: tableId }));
                     return;
                 }
-                var gameMsg = { type: 'GAME_START', tableId: tableId, channelId: channelId, players: playersWithStack, blinds: { small: parts[0], big: parts[1] }, buyIn: chan.buyIn || chan.BUYIN };
+                var gameMsg = { type: 'GAME_START', tableId: tableId, channelId: channelId, players: playersWithStack, blinds: { small: parts[0], big: parts[1] } };
                 MDS.comms.solo(JSON.stringify(gameMsg));
                 broadcastToTable(tableId, gameMsg);
             });

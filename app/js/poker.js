@@ -8,10 +8,9 @@ var gamesMap = {};
 /**
  * Poker game constructor (ES5 version)
  */
-function PokerGame(tableId, players, blinds, channelId, buyIn) {
+function PokerGame(tableId, players, blinds, channelId) {
     this.tableId = tableId;
     this.channelId = channelId;           // associated payment channel
-    this.buyIn = new Decimal(buyIn || blinds.big);  // store buyIn for minRaise
     this.players = [];
     for (var i = 0; i < players.length; i++) {
         var p = players[i];
@@ -37,7 +36,7 @@ function PokerGame(tableId, players, blinds, channelId, buyIn) {
     this.communityCards = [];
     this.round = 'waiting'; // waiting, commit, preflop, flop, turn, river, showdown
     this.lastAction = null;
-    this.minRaise = this.buyIn;  // minRaise equals buyIn (initial stack)
+    this.minRaise = this.blinds.big;  // minRaise equals big blind
     this.seed = null;                      // final seed for deck
     this.commits = {};                      // commitments from players (by pubKey)
     this.reveals = {};                       // revealed secrets (by pubKey)
@@ -486,7 +485,7 @@ PokerGame.prototype.nextRound = function() {
         this.players[i].bet = new Decimal(0);
         this.players[i].acted = false;
     }
-    this.minRaise = this.buyIn;  // reset to buyIn after each round
+    this.minRaise = this.blinds.big;  // reset to big blind after each round
 
     if (this.round === 'preflop') {
         this.round = 'flop';
@@ -955,8 +954,8 @@ PokerGame.prototype.getChannelState = function() {
  * Initialize a new poker game for a table.
  * This should be called after channel is created.
  */
-function initGame(tableId, channelId, players, blinds, buyIn, callback) {
-    var game = new PokerGame(tableId, players, blinds, channelId, buyIn);
+function initGame(tableId, channelId, players, blinds, callback) {
+    var game = new PokerGame(tableId, players, blinds, channelId);
     gamesMap[tableId] = game;
     // Start commit phase
     game.startCommitPhase();
