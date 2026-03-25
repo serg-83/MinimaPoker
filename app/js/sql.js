@@ -32,7 +32,7 @@ var SQL = {
                 'settlementTx TEXT, updateTx TEXT, fundingAddress TEXT, eltooAddress TEXT, ' +
                 'participants TEXT, balances TEXT, lastGameState TEXT, signatures TEXT, ' +
                 'status TEXT, sequence INTEGER DEFAULT 0, timeout INTEGER, fundingTxId TEXT, ' +
-                'disputeStartBlock INTEGER, fundingSpent INTEGER DEFAULT 0, ' +
+                'fundingSpent INTEGER DEFAULT 0, ' +
                 'payoutFound INTEGER DEFAULT 0, payoutAmount TEXT, createdAt BIGINT, ' +
                 'spendTx TEXT DEFAULT \'\', closedAt BIGINT DEFAULT 0)',
             'CREATE TABLE IF NOT EXISTS channel_states (' +
@@ -233,23 +233,22 @@ var SQL = {
         var q = 'MERGE INTO channels (' +
             'hashId, tableId, fundingTx, triggerTx, settlementTx, updateTx, fundingAddress, eltooAddress, ' +
             'participants, balances, lastGameState, signatures, status, sequence, timeout, fundingTxId, ' +
-            'disputeStartBlock, createdAt) KEY(hashId) VALUES (' +
+            'createdAt) KEY(hashId) VALUES (' +
             this._esc(ch.id) + ',' + this._esc(ch.tableId) + ',' + this._esc(ch.fundingTx || '') + ',' +
             this._esc(ch.triggerTx || '') + ',' + this._esc(ch.settlementTx || '') + ',' + this._esc(ch.updateTx || '') + ',' +
             this._esc(ch.fundingAddress || '') + ',' + this._esc(ch.eltooAddress || '') + ',' +
             this._esc(JSON.stringify(ch.participants || [])) + ',' + this._esc(JSON.stringify(ch.balances || {})) + ',' +
             this._esc(JSON.stringify(ch.lastGameState || {})) + ',' + this._esc(JSON.stringify(ch.signatures || {})) + ',' +
             this._esc(ch.status || 'FUNDING') + ',' + (ch.sequence || 0) + ',' + (ch.timeoutBlocks || 0) + ',' +
-            this._esc(ch.fundingTxId || '') + ',' + (ch.disputeStartBlock || 'NULL') + ',' + Math.floor(Date.now()/1000) + ')';
+            this._esc(ch.fundingTxId || '') + ',' + Math.floor(Date.now()/1000) + ')';
         MDS.sql(q, callback);
     },
 
-    updateChannelAfterFunding: function(channelId, fundingTxId, status, disputeStartBlock, callback) {
-        if (typeof disputeStartBlock === 'function') { callback = disputeStartBlock; disputeStartBlock = null; }
+    updateChannelAfterFunding: function(channelId, fundingTxId, status, callback) {
+        if (typeof status === 'function') { callback = status; status = null; }
         var sets = [];
         if (fundingTxId !== null && fundingTxId !== undefined) sets.push("fundingTxId=" + this._esc(fundingTxId));
         if (status !== null && status !== undefined) sets.push("status=" + this._esc(status));
-        if (disputeStartBlock !== null && disputeStartBlock !== undefined) sets.push("disputeStartBlock=" + disputeStartBlock);
         if (status === 'CLOSED') sets.push("closedAt=" + Date.now());
         if (sets.length === 0) { if (callback) callback(null); return; }
         MDS.sql("UPDATE channels SET " + sets.join(',') + " WHERE hashId=" + this._esc(channelId), callback);
@@ -298,7 +297,6 @@ var SQL = {
         r.hashId        = r.hashid;
         r.id            = r.hashid;   // alias for deleteChannel
         r.fundingTxId   = r.fundingtxid;
-        r.disputeStartBlock = r.disputestartblock;
         r.fundingSpent  = r.fundingspent;
         r.payoutFound   = r.payoutfound;
         r.payoutAmount  = r.payoutamount;
@@ -329,15 +327,6 @@ var SQL = {
         });
     },
 
-    getDisputedChannels: function(callback) {
-        var self = this;
-        MDS.sql("SELECT * FROM channels WHERE status='DISPUTE'", function(res) {
-            if (!res || !res.status || !res.rows) { callback([]); return; }
-            var rows = [];
-            for (var i = 0; i < res.rows.length; i++) rows.push(self._parseChannelRow(res.rows[i]));
-            callback(rows);
-        });
-    },
 
     updateClosedChannels: function(callback) {
         var where = " status!='CLOSED' AND ((fundingSpent=1 AND payoutFound=1) OR status='CANCELLED' OR status='DENIED')";

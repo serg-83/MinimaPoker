@@ -1,7 +1,7 @@
 // channel.js – Multi-party payment channels for Minima Poker (eltoo-based)
 // Adapted from Thunder project: https://github.com/minima-global/Thunder
 // Supports N‑of‑N multisig with eltoo update/settlement mechanism
-// Includes improved error handling and dispute tracking
+// Includes improved error handling and channel tracking
 
 // ==================== Imports & Globals ====================
 /* global MDS, utils, Decimal, sql, maxima */
@@ -443,7 +443,6 @@ var Channel = function(tableId, participants, tokenId, timeoutBlocks) {
     this.sequence = 0;
     this.balances = {};
     this.status = 'FUNDING';
-    this.disputeStartBlock = null;
     this.signatures = {
         funding: {},
         trigger: {},
@@ -729,58 +728,7 @@ Channel.prototype._createSpendFundingTxn = function(total, outputs, callback) {
     });
 };
 
-/**
- * Start dispute: publish last trigger transaction and record dispute start block.
- * @param {function} callback - called with (err, result)
- */
-Channel.prototype.startDispute = function(callback) {
-    var self = this;
-    if (!self.triggerTx || !self.settlementTx) {
-        callback('No trigger/settlement available', null);
-        return;
-    }
-    // Get current block height
-    MDS.cmd('block', function(resp) {
-        if (!resp || !resp.response || !resp.response.block) {
-            callback('Failed to get current block', null);
-            return;
-        }
-        var currentBlock = resp.response.block;
-        self.disputeStartBlock = currentBlock;
-        self.status = 'DISPUTE';
 
-        // Post the trigger transaction (auto:true adds MMR proofs automatically)
-        postTxn(self.triggerTx, function(err, res) {
-            if (err) { callback(err, null); return; }
-            sql.updateChannelAfterFunding(self.id, null, 'DISPUTE', currentBlock, function() {});
-            callback(null, { triggerPosted: true, startBlock: currentBlock });
-        });
-    });
-};
-
-/**
- * Claim settlement after dispute timeout has passed.
- * Posts the last signed settlementTx on-chain.
- */
-Channel.prototype.claimSettlement = function(callback) {
-    var self = this;
-    if (!self.settlementTx) { callback('No settlement tx available', null); return; }
-    MDS.cmd('block', function(resp) {
-        if (!resp || !resp.response || !resp.response.block) { callback('Failed to get block', null); return; }
-        var currentBlock = parseInt(resp.response.block);
-        var startBlock   = parseInt(self.disputeStartBlock || 0);
-        if (currentBlock - startBlock < self.timeoutBlocks) {
-            callback('Timeout not reached. Blocks remaining: ' + (self.timeoutBlocks - (currentBlock - startBlock)), null);
-            return;
-        }
-        postTxn(self.settlementTx, function(err, res) {
-            if (err) { callback(err, null); return; }
-            self.status = 'CLOSED';
-            sql.updateChannelAfterFunding(self.id, null, 'CLOSED', null, function() {});
-            callback(null, { settled: true });
-        });
-    });
-};
 
 Channel.fromRow = function(row) {
     var participants = [];
@@ -818,9 +766,8 @@ Channel.fromRow = function(row) {
     chan.sequence   = row.sequence   || 0;
     chan.balances   = balances;
     chan.status     = row.status;
-    chan.disputeStartBlock = row.disputeStartBlock || row.disputestartblock;
     chan.signatures = signatures;
-    // Rebuild scripts from stored data so trackScript/dispute works after restart
+    // Rebuild scripts from stored data so trackScript works after restart
     if (chan.id && participants.length > 0) {
         var pubKeys = [];
         for (var pk = 0; pk < participants.length; pk++) {

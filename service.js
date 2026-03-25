@@ -563,9 +563,6 @@ var messageHandlers = {
         });
     },
 
-    DISPUTE_NOTIFY: function(message, fromPubKey) {
-        MDS.comms.solo(JSON.stringify({ type: 'DISPUTE_NOTIFY', tableId: message.tableId, channelId: message.channelId }));
-    },
 
     CLOSE_REQUEST: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
@@ -623,15 +620,11 @@ var messageHandlers = {
     },
 
     CLOSE_REQUEST_REJECT: function(message, fromPubKey) {
-        // User rejected — notify initiator and start dispute
+        // User rejected — notify initiator
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) return;
             maxima.sendRaw(message.fromPubKey, { type: 'CLOSE_REJECTED', channelId: chan.id, tableId: chan.tableId }, function() {});
-            // Start dispute to protect funds
-            chan.startDispute(function(dispErr) {
-                if (dispErr) { log('CLOSE_REQUEST_REJECT dispute error: ' + dispErr); return; }
-                MDS.comms.solo(JSON.stringify({ type: 'REFRESH_TABLE', tableId: chan.tableId }));
-            });
+            MDS.comms.solo(JSON.stringify({ type: 'REFRESH_TABLE', tableId: chan.tableId }));
         });
     },
 
@@ -728,22 +721,6 @@ var messageHandlers = {
         });
     },
 
-    DISPUTE: function(message, fromPubKey) {
-        if (!message.channelId) { log('DISPUTE missing channelId'); return; }
-        getChannel(message.channelId, function(err, chan) {
-            if (err || !chan) { log('Channel not found for DISPUTE'); return; }
-            chan.startDispute(function(err, result) {
-                if (err) { log('Failed to start dispute: ' + err); return; }
-                for (var i = 0; i < chan.participants.length; i++) {
-                    var p = chan.participants[i];
-                    if (p.pubKey !== getMyMaximaKey()) {
-                        sendWithAckAsync(p.pubKey, { type: 'DISPUTE_STARTED', channelId: chan.id, tableId: chan.tableId, startBlock: result.startBlock }, function() {});
-                    }
-                }
-                MDS.comms.solo(JSON.stringify({ type: 'DISPUTE_STARTED', tableId: chan.tableId, channelId: chan.id }));
-            });
-        });
-    },
 
     BET: function(message, fromPubKey) {
         var game = poker.getGame(message.tableId);

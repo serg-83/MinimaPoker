@@ -17,7 +17,6 @@ var tableUI = {
     _dirtyComponents: {},
     _turnTimer:      null,
     _phaseTimer:     null,
-    _disputePoller:  null,
     _readyPlayers:   {},
     TURN_TIMEOUT:    60000,
     PHASE_TIMEOUT:   40000,
@@ -39,11 +38,6 @@ var tableUI = {
             var newStatus = ch ? (ch.status || ch.STATUS) : null;
             if (newStatus === 'OPEN' && prevStatus !== 'OPEN' && self._isEnforcer()) {
                 self._autoStartGame();
-            }
-            // Restore dispute poller if channel is in DISPUTE state
-            if (newStatus === 'DISPUTE' && !self._disputePoller && ch) {
-                var chan = channel.fromRow(ch);
-                if (chan) self._startDisputePoller(chan);
             }
         });
     },
@@ -432,7 +426,6 @@ var tableUI = {
     _clearTimers: function() {
         if (this._turnTimer)  { clearTimeout(this._turnTimer);  this._turnTimer  = null; }
         if (this._phaseTimer) { clearTimeout(this._phaseTimer); this._phaseTimer = null; }
-        if (this._disputePoller) { clearInterval(this._disputePoller); this._disputePoller = null; }
     },
 
     _startTurnTimer: function() {
@@ -509,8 +502,6 @@ var tableUI = {
         else if (action === 'reveal-forced') msg += ' — reveal forced';
         pokerModal.alert(msg, 'warning');
     },
-
-    // ---- Dispute & claim ----
 
     createChannel: function() {
         if (!this.players || this.players.length < 2) {
@@ -745,10 +736,10 @@ var tableUI = {
             var round = self.gameState ? self.gameState.round : 'waiting';
             var duringGame = round && round !== 'waiting' && round !== 'finished';
             var promptMsg = duringGame
-                ? '⚠️ Opponent wants to close the channel DURING the game. Agree (funds split by last settlement) or Dispute?'
+                ? '⚠️ Opponent wants to close the channel DURING the game. Agree (funds split by last settlement) or Reject?'
                 : 'Opponent wants to close the channel cooperatively. Agree?';
             pokerModal.choice('Close Channel Request', promptMsg,
-                [{ label: '✅ Agree', value: 'agree' }, { label: '⚔️ Dispute', value: 'dispute' }],
+                [{ label: '✅ Agree', value: 'agree' }, { label: '❌ Reject', value: 'reject' }],
                 function(choice) {
                     if (choice === 'agree') {
                         MDS.comms.solo(JSON.stringify({ type: 'CLOSE_REQUEST_CONFIRM', channelId: message.channelId, spendTx: message.spendTx, fromPubKey: message.fromPubKey }));
@@ -760,7 +751,7 @@ var tableUI = {
             return;
         }
         if (message.type === 'CLOSE_REJECTED' && message.tableId === this.tableId) {
-            pokerModal.alert('Close rejected by opponent. Dispute started on their side.', 'warning');
+            pokerModal.alert('Close rejected by opponent.', 'warning');
             this.loadChannelInfo();
             return;
         }
@@ -799,13 +790,6 @@ var tableUI = {
             setTimeout(function() { goBackToLobby(); }, 500);
             return;
         }
-        if (message.type === 'DISPUTE_NOTIFY' && message.tableId === this.tableId) {
-            var self = this;
-            pokerModal.confirm('Opponent started a dispute! Start your own dispute to protect your funds?', function(ok) {
-                if (ok) self.startDispute();
-            });
-            return;
-        }
         if (message.tableId && message.tableId !== this.tableId) return;
         this.loadChannelInfo();
         this.loadGameState();
@@ -823,9 +807,6 @@ var tableUI = {
         maxima.registerHandler('CHANNEL_UPDATE', reloadCh);
         maxima.registerHandler('CHANNEL_CLOSE', function(msg) {
             if (msg.tableId === self.tableId) { self._clearTimers(); self.loadChannelInfo(); }
-        });
-        maxima.registerHandler('DISPUTE_NOTIFY', function(msg) {
-            if (msg.tableId === self.tableId) self.handleServiceMessage(msg);
         });
     }
 };

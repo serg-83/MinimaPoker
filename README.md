@@ -6,15 +6,15 @@
 
 ## How It Works
 
-### Off-Chain Payment Channels (eltoo)
-All bets happen **off-chain** using eltoo-style payment channels built on Minima's scripting layer:
+### One-Shot Games with Payment Channels
+Simple, fast poker games using eltoo-style payment channels built on Minima's scripting layer:
 
 1. **Open** — Two players lock funds into a shared on-chain UTXO (the channel). A funding transaction is co-signed by both parties.
 2. **Play** — Every bet, call, raise or fold updates the channel state off-chain. Each update is a signed settlement transaction that supersedes the previous one.
-3. **Close (Cooperative)** — Both players agree on the final balance and broadcast the latest settlement. Funds are released instantly.
-4. **Close (Dispute)** — If one party is unresponsive, the other triggers the channel on-chain. After a timelock (~30 blocks), the latest valid settlement is enforced automatically.
+3. **Auto-Close** — After showdown, the channel automatically closes and funds are distributed. Players return to lobby for the next game.
+4. **Independent Close** — If needed, either player can close the channel independently without waiting for opponent agreement.
 
-No third party, no escrow, no trust required.
+No third party, no escrow, no trust required. Each game is self-contained — play once, settle, start fresh.
 
 ### Card Privacy
 Cards are **never stored on-chain or in the database**. Each player commits a random seed at game start. After the hand, seeds are revealed and combined — the full deck is deterministically derived client-side using `combineSeeds` + `seededShuffle`. Your hole cards are visible only to you.
@@ -33,11 +33,11 @@ table.html      — Poker table: game UI, channel status, betting controls
 service.js      — Background service (Rhino/ES5): handles all Maxima messages,
                   channel state machine, game logic coordination
 app/js/
-  channel.js    — Payment channel: open / update / trigger / settle / dispute
+  channel.js    — Payment channel: open / update / close / independent close
   poker.js      — Texas Hold'em game logic (blinds, betting rounds, showdown)
   table.js      — Table UI rendering (seats, cards, pot, channel status)
   maxima.js     — Maxima send/receive wrapper
-  sql.js        — Local SQLite DB (tables, players, channel state)
+  sql.js        — Local SQLite DB (tables, players, channel state, game history)
   modal.js      — UI modals (alert / confirm / prompt / choice)
   wallet.js     — Balance, keys, coin management
 app/css/
@@ -61,10 +61,13 @@ Player A                              Player B
    |  ←── game actions (Maxima) ──►      |
    |  ←── signed settlements    ──►      |
    |                                     |
-   |── CLOSE_REQUEST ─────────────────►  |
-   |◄─ CLOSE_CONFIRM (final settle) ───  |
-   |   [settlement broadcast]            |
+   |   [showdown completed]              |
+   |   [auto-close channel]              |
+   |   [return to lobby]                 |
 ```
+
+### Game History & Recovery
+If a transaction fails to broadcast, players can access their **Game History** in the lobby to resend the last known settlement transaction. This simple recovery mechanism replaces complex dispute timeouts with immediate transaction recovery.
 
 ---
 
