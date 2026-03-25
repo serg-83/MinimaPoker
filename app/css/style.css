@@ -716,6 +716,26 @@ button.secondary, .secondary {
 }
 button.secondary:hover, .secondary:hover { background: rgba(255,255,255,0.2); }
 
+/* Small variant */
+button.primary.btn-sm, .primary.btn-sm,
+button.secondary.btn-sm, .secondary.btn-sm {
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    border-radius: 14px;
+}
+button.danger, .danger {
+    background: linear-gradient(145deg, #c0392b, #96281b);
+    color: #fff;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+button.danger.btn-sm, .danger.btn-sm { padding: 3px 10px; font-size: 0.78rem; border-radius: 14px; }
+button.danger:hover, .danger:hover { filter: brightness(1.1); }
+
 /* ===== CUSTOM MODAL ===== */
 .poker-modal-overlay {
   display: none;

@@ -414,14 +414,14 @@
                     if (s === 'OPEN' || s === 'FUNDING' || s === 'DISPUTE') {
                         var tid = ch.tableId || ch.tableid || '';
                         if (tid) {
-                            actionBtn = '<button class="ch-action-btn" data-tableid="' + tid + '" style="font-size:0.75rem;padding:2px 8px">Manage</button>';
+                            actionBtn = '<button class="ch-action-btn primary btn-sm" data-tableid="' + tid + '">Manage</button>';
                         }
                     } else if (s === 'CLOSED') {
                         var spendTx = ch.spendTx || ch.spendtx || '';
                         if (spendTx) {
-                            actionBtn = '<button class="ch-rebroadcast-btn" data-spend="' + spendTx + '" style="font-size:0.75rem;padding:2px 8px">Rebroadcast</button> ';
+                            actionBtn = '<button class="ch-rebroadcast-btn primary btn-sm" data-spend="' + spendTx + '">Rebroadcast</button> ';
                         }
-                        actionBtn += '<button class="ch-delete-btn" data-id="' + ch.id + '" style="font-size:0.75rem;padding:2px 8px;opacity:0.6">Delete</button>';
+                        actionBtn += '<button class="ch-delete-btn secondary btn-sm" data-id="' + ch.id + '">Delete</button>';
                     }
                     html += '<tr style="border-bottom:1px solid #333"><td style="padding:4px"><span style="color:' + color + '">' + s + '</span></td><td style="padding:4px">' + (balStr || '—') + '</td><td style="padding:4px;white-space:nowrap">' + dateStr + '</td><td style="padding:4px">' + actionBtn + '</td></tr>';
                 }

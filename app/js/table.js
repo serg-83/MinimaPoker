@@ -227,15 +227,15 @@ var tableUI = {
             var color = s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : (s === 'CLOSED' ? 'gray' : (s === 'DISPUTE' ? 'red' : 'red')));
             html = '<strong>Channel:</strong> <span style="color:' + color + ';">' + s + '</span>';
             if (s === 'OPEN') {
-                html += ' <button id="closeChannelBtn2" class="primary" style="font-size:0.75rem;padding:3px 10px">Close Channel</button>';
+                html += ' <button id="closeChannelBtn2" class="primary btn-sm">Close Channel</button>';
             } else if (s === 'FUNDING') {
-                html += ' <button id="cancelChannelBtn" class="secondary" style="font-size:0.75rem;padding:3px 10px">Cancel &amp; Reclaim</button>';
+                html += ' <button id="cancelChannelBtn" class="secondary btn-sm">Cancel &amp; Reclaim</button>';
             } else if (s === 'DISPUTE') {
                 var startBlock = parseInt((this.channelInfo.disputeStartBlock || this.channelInfo.disputestartblock) || 0);
                 var timeout = parseInt((this.channelInfo.timeout) || 30);
                 if (startBlock > 0) {
                     html += ' <span id="disputeCountdown" style="font-size:0.75rem;color:#aaa;">checking blocks...</span>';
-                    html += ' <button id="claimSettleBtn" class="primary" style="font-size:0.75rem;padding:3px 10px;display:none">Claim Funds</button>';
+                    html += ' <button id="claimSettleBtn" class="primary btn-sm" style="display:none">Claim Funds</button>';
                     this._updateDisputeCountdown(startBlock, timeout);
                 }
             }

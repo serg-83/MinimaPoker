@@ -386,15 +386,7 @@ button.secondary:hover, .secondary:hover { background: rgba(255,255,255,0.2); }
 }
 
 #phase-controls button.primary {
-    background: var(--gold);
-    color: #000;
-    border: none;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-weight: bold;
-    cursor: pointer;
     margin-left: 8px;
-    font-size: 0.85rem;
 }
 
 /* ===== CHANNEL STATUS ===== */
@@ -415,28 +407,8 @@ button.secondary:hover, .secondary:hover { background: rgba(255,255,255,0.2); }
     max-width: 250px;
 }
 
-#channel-status button.primary {
-    background: var(--gold);
-    color: #000;
-    border: none;
-    padding: 4px 12px;
-    border-radius: 16px;
-    font-weight: bold;
-    cursor: pointer;
-    margin-left: 8px;
-    font-size: 0.8rem;
-}
-
-#channel-status button.danger {
-    background: #c0392b;
-    color: #fff;
-    border: none;
-    padding: 4px 12px;
-    border-radius: 16px;
-    font-weight: bold;
-    cursor: pointer;
-    margin-left: 8px;
-    font-size: 0.8rem;
+#channel-status button {
+    margin-left: 6px;
 }
 
 /* ===== STATUS ===== */
