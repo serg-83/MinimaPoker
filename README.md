@@ -37,7 +37,7 @@ app/js/
   poker.js      — Texas Hold'em game logic (blinds, betting rounds, showdown)
   table.js      — Table UI rendering (seats, cards, pot, channel status)
   maxima.js     — Maxima send/receive wrapper
-  sql.js        — Local SQLite DB (tables, players, channel state, game history)
+  sql.js        — Local SQLite DB (tables, players, channel state)
   modal.js      — UI modals (alert / confirm / prompt / choice)
   wallet.js     — Balance, keys, coin management
 app/css/
@@ -65,9 +65,6 @@ Player A                              Player B
    |   [auto-close channel]              |
    |   [return to lobby]                 |
 ```
-
-### Game History & Recovery
-If a transaction fails to broadcast, players can access their **Game History** in the lobby to resend the last known settlement transaction. This simple recovery mechanism replaces complex dispute timeouts with immediate transaction recovery.
 
 ---
 
