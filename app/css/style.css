@@ -690,6 +690,32 @@ h1::after {
 
 .card[data-suit="♥"], .card[data-suit="♦"] { color: #c0392b; }
 
+/* ===== Generic primary/secondary buttons ===== */
+button.primary, .primary {
+    background: linear-gradient(145deg, #d4af37, #b38b2d);
+    color: #000;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif;
+}
+button.primary:hover, .primary:hover { filter: brightness(1.1); }
+
+button.secondary, .secondary {
+    background: rgba(255,255,255,0.1);
+    color: #f0f0e0;
+    border: 1px solid rgba(255,255,255,0.3);
+    padding: 8px 18px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif;
+}
+button.secondary:hover, .secondary:hover { background: rgba(255,255,255,0.2); }
+
 /* ===== CUSTOM MODAL ===== */
 .poker-modal-overlay {
   display: none;
