@@ -223,7 +223,7 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1, CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1, CHANNEL_UPDATE_PENDING: 1, CHANNEL_UPDATE_COMPLETE: 1 };
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1, CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1, CHANNEL_UPDATE_PENDING: 1, CHANNEL_UPDATE_COMPLETE: 1, GAME_END_AUTO_CLOSE: 1, GAME_ENDED_RETURN_LOBBY: 1 };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
@@ -645,6 +645,53 @@ var messageHandlers = {
         // Channel update complete - allow closing again
         delete pendingUpdates[message.channelId];
         log('Channel update complete: ' + message.channelId);
+    },
+
+    GAME_END_AUTO_CLOSE: function(message, fromPubKey) {
+        // Auto-close game after showdown - close channel and delete table
+        log('Auto-closing game: table=' + message.tableId + ' channel=' + message.channelId);
+
+        getChannel(message.channelId, function(err, chan) {
+            if (err || !chan) {
+                log('GAME_END_AUTO_CLOSE: channel not found ' + message.channelId);
+                return;
+            }
+
+            // Close channel cooperatively
+            chan.closeCooperative(function(closeErr) {
+                if (closeErr) {
+                    log('GAME_END_AUTO_CLOSE: close failed: ' + closeErr);
+                    return;
+                }
+
+                log('GAME_END_AUTO_CLOSE: channel closed successfully');
+
+                // Delete table and notify players to return to lobby
+                sql.deleteTable(message.tableId, function() {
+                    // Notify all players that game ended and they should return to lobby
+                    sql.getPlayers(message.tableId, function(players) {
+                        if (players) {
+                            for (var i = 0; i < players.length; i++) {
+                                var pk = players[i].PLAYERPUBKEY || players[i].playerPubKey;
+                                if (pk && pk !== myMaximaKey) {
+                                    maxima.sendRaw(pk, {
+                                        type: 'GAME_ENDED',
+                                        tableId: message.tableId,
+                                        message: 'Game completed. Returning to lobby...'
+                                    }, function() {});
+                                }
+                            }
+                        }
+
+                        // Notify local UI to return to lobby
+                        MDS.comms.solo(JSON.stringify({
+                            type: 'GAME_ENDED_RETURN_LOBBY',
+                            tableId: message.tableId
+                        }));
+                    });
+                });
+            });
+        });
     },
 
     CLOSE_ACCEPT: function(message, fromPubKey) {

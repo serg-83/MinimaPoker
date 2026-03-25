@@ -173,12 +173,14 @@ var tableUI = {
         } else if (round === 'reveal') {
             msg = 'Revealing secrets... (' + (this._revealSent ? 'revealed' : 'sending...') + ')';
         } else if (round === 'finished') {
-            $('#closeChannelBtn').show();
-            $('#readyBtn').show();
+            $('#closeChannelBtn').hide(); // Auto-close, no manual close needed
+            $('#readyBtn').hide(); // No next hand in one-shot games
             // Show result if not already shown (e.g. after page reload)
             if (!$('#status').text()) {
                 this._showHandResult(this.gameState);
             }
+            // Show game completion message
+            $('#phaseMsg').text('Game completed. Channel will close automatically...');
         } else {
             $('#closeChannelBtn').hide();
         }
@@ -766,8 +768,6 @@ var tableUI = {
         $('#checkBtn').click(function() { tableUI.sendAction('check'); });
         $('#commitBtn').click(function() { tableUI.sendCommit(); });
         $('#revealBtn').click(function() { tableUI.sendReveal(); });
-        $('#readyBtn').click(function() { tableUI.sendReady(); });
-        $('#closeChannelBtn').click(function() { tableUI.closeChannelCooperative(); });
         $('#createChannelBtn').click(function() { tableUI.createChannel(); });
         $('#closeChannelBtn2').click(function() { tableUI.showCloseChannelDialog(); });
         $('#cancelChannelBtn').click(function() { tableUI.cancelFundingChannel(); });
@@ -814,7 +814,7 @@ var tableUI = {
                 ? '😔 You lost. ' + (winners[0].name || winners[0].pubKey.slice(0,8)) + ' wins ' + winners[0].amount
                 : 'Hand finished');
         $('#status').text(msg).css('color', iWon ? '#4caf50' : '#f39c12');
-        $('#readyBtn').show();
+        // No Ready button in one-shot games - game will auto-close
     },
 
     sendReady: function() {
@@ -903,6 +903,16 @@ var tableUI = {
         }
         if (message.type === 'CLOSE_BLOCKED' && message.channelId === this.channelInfo.hashId) {
             pokerModal.alert(message.reason || 'Channel close blocked. Please wait and try again.', 'warning');
+            return;
+        }
+        if (message.type === 'GAME_ENDED' && message.tableId === this.tableId) {
+            pokerModal.alert(message.message || 'Game completed. Returning to lobby...', 'success');
+            setTimeout(function() { goBackToLobby(); }, 2000);
+            return;
+        }
+        if (message.type === 'GAME_ENDED_RETURN_LOBBY' && message.tableId === this.tableId) {
+            pokerModal.alert('Game completed. Channel closed. Returning to lobby...', 'success');
+            setTimeout(function() { goBackToLobby(); }, 2000);
             return;
         }
         if (message.type === 'TABLE_DELETED' && message.tableId === this.tableId) {

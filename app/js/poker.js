@@ -140,6 +140,16 @@ PokerGame.prototype._flushDbUpdate = function() {
             if (isEnforcer) {
                 sendChannelUpdate(self, function(ok) {
                     if (!ok) MDS.log('showdown: sendChannelUpdate failed');
+                    // After channel update, trigger automatic game end
+                    setTimeout(function() {
+                        if (typeof MDS !== 'undefined' && MDS.comms) {
+                            MDS.comms.solo(JSON.stringify({
+                                type: 'GAME_END_AUTO_CLOSE',
+                                tableId: self.tableId,
+                                channelId: self.channelId
+                            }));
+                        }
+                    }, 2000); // 2 second delay to show results
                 });
             }
         }
