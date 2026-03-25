@@ -561,10 +561,23 @@ PokerGame.prototype._compareHands = function(a, b) {
 };
 
 PokerGame.prototype.showdown = function() {
+    try {
+        this._doShowdown();
+    } catch (e) {
+        MDS.log('showdown ERROR: ' + e);
+        // Ensure round is finished even if showdown logic fails
+        this.lastWinners = this.lastWinners || [];
+        this.pot = new Decimal(0);
+        this.round = 'finished';
+    }
+};
+
+PokerGame.prototype._doShowdown = function() {
     var active = [];
     for (var i = 0; i < this.players.length; i++) {
         if (!this.players[i].folded) active.push(this.players[i]);
     }
+    MDS.log('showdown: active=' + active.length + ' pot=' + this.pot.toString() + ' community=' + this.communityCards.length);
 
     this.lastWinners = [];
 
@@ -584,6 +597,10 @@ PokerGame.prototype.showdown = function() {
 
         // Build side pots and award each one
         var sidePots = this.buildSidePots();
+        // Fallback: if no side pots (e.g. totalContribution not tracked), treat entire pot as single pot
+        if (sidePots.length === 0 && this.pot.greaterThan(0)) {
+            sidePots = [{ amount: this.pot, eligible: active }];
+        }
         var winMap = {}; // pubKey -> total won
 
         for (var sp = 0; sp < sidePots.length; sp++) {
@@ -591,8 +608,6 @@ PokerGame.prototype.showdown = function() {
             var eligible = pot.eligible;
 
             if (eligible.length === 0) {
-                // No eligible players (all folded) — shouldn't happen after fold check,
-                // but just in case, give to last active player
                 if (active.length > 0) {
                     var fallback = active[0].pubKey;
                     winMap[fallback] = (winMap[fallback] || new Decimal(0)).plus(pot.amount);
@@ -601,7 +616,6 @@ PokerGame.prototype.showdown = function() {
             }
 
             if (eligible.length === 1) {
-                // Only one eligible — they win this pot
                 var sole = eligible[0].pubKey;
                 winMap[sole] = (winMap[sole] || new Decimal(0)).plus(pot.amount);
                 continue;
@@ -636,7 +650,6 @@ PokerGame.prototype.showdown = function() {
         for (var wk in winMap) {
             if (!winMap.hasOwnProperty(wk)) continue;
             var won = winMap[wk];
-            // Find player
             for (var pi = 0; pi < this.players.length; pi++) {
                 if (this.players[pi].pubKey === wk) {
                     this.players[pi].stack = this.players[pi].stack.plus(won);
@@ -659,6 +672,7 @@ PokerGame.prototype.showdown = function() {
 
     this.pot = new Decimal(0);
     this.round = 'finished';
+    MDS.log('showdown DONE: winners=' + JSON.stringify(this.lastWinners));
 };
 
 PokerGame.prototype.evaluateHand = function(hole, community) {
@@ -847,8 +861,18 @@ PokerGame.prototype.getChannelState = function() {
         balances[this.players[i].pubKey] = new Decimal(this.players[i].stack);
     }
     // Distribute unresolved pot using side-pot logic so each player gets fair share
-    if (this.pot.greaterThan(0) && this.players.length > 0) {
+    // BUT: if round is 'finished', pot was already distributed in showdown - don't redistribute
+    if (this.pot.greaterThan(0) && this.players.length > 0 && this.round !== 'finished') {
         var sidePots = this.buildSidePots();
+        // Fallback: if no side pots built, distribute among non-folded players
+        if (sidePots.length === 0) {
+            var fallbackEligible = [];
+            for (var fb = 0; fb < this.players.length; fb++) {
+                if (!this.players[fb].folded) fallbackEligible.push(this.players[fb]);
+            }
+            if (fallbackEligible.length === 0) fallbackEligible = this.players.slice();
+            sidePots = [{ amount: this.pot, eligible: fallbackEligible }];
+        }
         for (var sp = 0; sp < sidePots.length; sp++) {
             var pot = sidePots[sp];
             var eligible = pot.eligible;
@@ -950,6 +974,11 @@ function sendChannelUpdate(game, callback) {
     var chan = channel.get(game.channelId);
     if (!chan) { MDS.log('Channel not found: ' + game.channelId); callback(false); return; }
 
+    // Mark channel as having pending update to prevent premature closing
+    if (typeof window !== 'undefined' && window.MDS && window.MDS.comms) {
+        window.MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_UPDATE_PENDING', channelId: game.channelId }));
+    }
+
     var myWalletKey = (typeof getMyWalletKey === 'function') ? getMyWalletKey() :
                       (typeof window !== 'undefined' ? window.myMinimaPublicKey : '');
     var myMaxKey    = (typeof getMyMaximaKey === 'function') ? getMyMaximaKey() :
@@ -978,13 +1007,26 @@ function sendChannelUpdate(game, callback) {
                 for (var pi = 0; pi < participants.length; pi++) {
                     if (participants[pi].pubKey !== myMaxKey) others.push(participants[pi].pubKey);
                 }
-                if (others.length === 0) { callback(true); return; }
+                if (others.length === 0) {
+                    // Notify that channel update is complete
+                    if (typeof window !== 'undefined' && window.MDS && window.MDS.comms) {
+                        window.MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_UPDATE_COMPLETE', channelId: game.channelId }));
+                    }
+                    callback(true);
+                    return;
+                }
                 var done = 0, anyFailed = false;
                 for (var oi = 0; oi < others.length; oi++) {
                     (function(pk) {
                         maxima.sendWithAck(pk, sendMsg, function(ok) {
                             if (!ok) anyFailed = true;
-                            if (++done === others.length) callback(!anyFailed);
+                            if (++done === others.length) {
+                                // Notify that channel update is complete
+                                if (typeof window !== 'undefined' && window.MDS && window.MDS.comms) {
+                                    window.MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_UPDATE_COMPLETE', channelId: game.channelId }));
+                                }
+                                callback(!anyFailed);
+                            }
                         });
                     })(others[oi]);
                 }

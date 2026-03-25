@@ -175,7 +175,10 @@ var tableUI = {
         } else if (round === 'finished') {
             $('#closeChannelBtn').show();
             $('#readyBtn').show();
-            // status text set by _showHandResult on transition
+            // Show result if not already shown (e.g. after page reload)
+            if (!$('#status').text()) {
+                this._showHandResult(this.gameState);
+            }
         } else {
             $('#closeChannelBtn').hide();
         }
@@ -720,8 +723,44 @@ var tableUI = {
         $('#foldBtn').click(function() { tableUI.sendAction('fold'); });
         $('#callBtn').click(function() { tableUI.sendAction('call'); });
         $('#raiseBtn').click(function() {
-            pokerModal.prompt('Enter raise amount:', '', function(amount) {
-                if (amount) tableUI.sendAction('raise', amount);
+            var gs = tableUI.gameState;
+            var blinds = tableUI.channelInfo ? (tableUI.channelInfo.blinds || tableUI.channelInfo.BLINDS || '10/20') : '10/20';
+            var bb = parseInt(blinds.split('/')[1] || 20);
+            var minRaise = bb;
+            // Calculate max raise (stack - amount needed to call)
+            var currentBet = gs ? parseInt(gs.currentbet || gs.currentBet || 0) : 0;
+            var myBet = 0;
+            var myStack = 0;
+            if (gs && tableUI.players && tableUI.players[tableUI.myPlayerIndex]) {
+                var bets = gs.bets || {};
+                if (typeof bets === 'string') { try { bets = JSON.parse(bets); } catch(e) { bets = {}; } }
+                var myPk = tableUI.players[tableUI.myPlayerIndex].playerPubKey;
+                myBet = parseInt(bets[myPk] || 0);
+                // Get stack from players array in game state
+                var plArr = gs.players || [];
+                for (var pi = 0; pi < plArr.length; pi++) {
+                    if ((plArr[pi].pubKey || plArr[pi].PUBKEY) === myPk) { myStack = parseInt(plArr[pi].stack || 0); break; }
+                }
+            }
+            var callCost = currentBet - myBet;
+            if (callCost < 0) callCost = 0;
+            var maxRaise = myStack - callCost;
+            if (maxRaise < minRaise) {
+                pokerModal.alert('Not enough chips to raise (need at least ' + (callCost + minRaise) + ')', 'error');
+                return;
+            }
+            pokerModal.prompt('Raise amount (min ' + minRaise + ', max ' + maxRaise + '):', String(minRaise), function(amount) {
+                if (!amount) return;
+                var val = parseInt(amount);
+                if (isNaN(val) || val < minRaise) {
+                    pokerModal.alert('Minimum raise is ' + minRaise, 'error');
+                    return;
+                }
+                if (val > maxRaise) {
+                    pokerModal.alert('Maximum raise is ' + maxRaise, 'error');
+                    return;
+                }
+                tableUI.sendAction('raise', String(val));
             });
         });
         $('#checkBtn').click(function() { tableUI.sendAction('check'); });
@@ -746,11 +785,18 @@ var tableUI = {
             if (!ok) {
                 pokerModal.alert('Failed to send action', 'error');
                 self._actionPending = false;
+                self._markDirty('controls');
+                self.scheduleUpdate();
             }
-            // Buttons re-enabled by renderControls when game state updates
         });
-        // Safety timeout — re-enable after 10s if no state update
-        setTimeout(function() { self._actionPending = false; }, 10000);
+        // Safety timeout — re-enable buttons if no state update received
+        setTimeout(function() {
+            if (self._actionPending) {
+                self._actionPending = false;
+                self._markDirty('controls');
+                self.scheduleUpdate();
+            }
+        }, 5000);
     },
 
     _showHandResult: function(state) {
@@ -853,6 +899,10 @@ var tableUI = {
         if (message.type === 'CLOSE_REJECTED' && message.tableId === this.tableId) {
             pokerModal.alert('Close rejected by opponent. Dispute started on their side.', 'warning');
             this.loadChannelInfo();
+            return;
+        }
+        if (message.type === 'CLOSE_BLOCKED' && message.channelId === this.channelInfo.hashId) {
+            pokerModal.alert(message.reason || 'Channel close blocked. Please wait and try again.', 'warning');
             return;
         }
         if (message.type === 'TABLE_DELETED' && message.tableId === this.tableId) {

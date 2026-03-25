@@ -223,7 +223,7 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1, CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1 };
+        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1, CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1, CHANNEL_UPDATE_PENDING: 1, CHANNEL_UPDATE_COMPLETE: 1 };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
@@ -570,6 +570,18 @@ var messageHandlers = {
     CLOSE_REQUEST: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) { log('CLOSE_REQUEST: channel not found'); return; }
+
+            // Block closing if channel update is pending
+            if (pendingUpdates[message.channelId]) {
+                log('CLOSE_REQUEST blocked: channel update pending for ' + message.channelId);
+                maxima.sendRaw(fromPubKey, {
+                    type: 'CLOSE_BLOCKED',
+                    channelId: message.channelId,
+                    reason: 'Channel update in progress. Please wait and try again.'
+                }, function() {});
+                return;
+            }
+
             // Forward to browser for user confirmation
             MDS.comms.solo(JSON.stringify({
                 type: 'CLOSE_REQUEST_UI',
@@ -623,6 +635,18 @@ var messageHandlers = {
         });
     },
 
+    CHANNEL_UPDATE_PENDING: function(message, fromPubKey) {
+        // Mark channel as having pending update - block closing
+        pendingUpdates[message.channelId] = true;
+        log('Channel update pending: ' + message.channelId);
+    },
+
+    CHANNEL_UPDATE_COMPLETE: function(message, fromPubKey) {
+        // Channel update complete - allow closing again
+        delete pendingUpdates[message.channelId];
+        log('Channel update complete: ' + message.channelId);
+    },
+
     CLOSE_ACCEPT: function(message, fromPubKey) {
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) return;
@@ -654,11 +678,12 @@ var messageHandlers = {
 
     BET: function(message, fromPubKey) {
         var game = poker.getGame(message.tableId);
-        if (!game) return;
+        if (!game) { log('BET: no game for table ' + message.tableId); return; }
         // Dedup: attach nonce or use action+player+round as key
         var betKey = message.tableId + ':' + game.round + ':' + game.currentPlayer + ':' + message.player + ':' + message.action;
-        if (!betKey || (poker._lastBetKey && poker._lastBetKey === betKey)) return;
+        if (!betKey || (poker._lastBetKey && poker._lastBetKey === betKey)) { log('BET: dedup skip ' + betKey); return; }
         var ok = game.act(message.player, message.action, message.amount);
+        log('BET: act(' + message.player.substring(0,8) + ', ' + message.action + ', ' + message.amount + ') = ' + ok + ' round=' + game.round);
         if (ok) {
             poker._lastBetKey = betKey;
             game._flushDbUpdate();
@@ -674,6 +699,9 @@ var messageHandlers = {
                     if (!success) log('BET: sendChannelUpdate failed');
                 });
             }
+        } else {
+            // act failed — still refresh so browser can re-enable buttons
+            debouncedRefreshTable(message.tableId);
         }
     },
 
