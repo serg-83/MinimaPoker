@@ -474,15 +474,23 @@ var messageHandlers = {
     },
 
     FINISH_START_CHANNEL: function(message, fromPubKey) {
-        log('FINISH_START_CHANNEL received for channel: ' + message.channelId);
+        log('FINISH_START_CHANNEL received for channel: ' + message.channelId + ' from: ' + fromPubKey);
         getChannel(message.channelId, function(err, chan) {
-            if (err || !chan) { log('Channel not found for FINISH_START_CHANNEL: ' + message.channelId); return; }
-            log('FINISH_START_CHANNEL: signing funding tx');
+            if (err || !chan) {
+                log('Channel not found for FINISH_START_CHANNEL: ' + message.channelId + ' error: ' + err);
+                return;
+            }
+            log('FINISH_START_CHANNEL: found channel, current status: ' + chan.status);
+            log('FINISH_START_CHANNEL: signing funding tx, length: ' + (message.fundingTx ? message.fundingTx.length : 'null'));
             signTxnAsync(message.fundingTx, 'auto', function(err, signed) {
-                if (err) { log('FINISH_START_CHANNEL sign failed: ' + err); return; }
-                log('FINISH_START_CHANNEL: posting signed funding tx');
+                if (err) {
+                    log('FINISH_START_CHANNEL sign failed: ' + err);
+                    return;
+                }
+                log('FINISH_START_CHANNEL: funding tx signed successfully, posting...');
                 var txid = 'post_' + randomString();
                 MDS.cmd('txnimport id:' + txid + ' data:' + signed + ';txnpost id:' + txid + ' auto:false;txndelete id:' + txid, function(res) {
+                    log('FINISH_START_CHANNEL: post command result: ' + JSON.stringify(res));
                     var postRes = Array.isArray(res) ? res[1] : null;
                     if (!postRes || !postRes.status) {
                         log('FINISH_START_CHANNEL: post failed: ' + JSON.stringify(postRes));
@@ -490,10 +498,16 @@ var messageHandlers = {
                     }
                     log('FINISH_START_CHANNEL: funding tx posted successfully, updating status to OPEN');
                     chan.status = 'OPEN';
+                    channel.set(chan.id, chan);
+                    log('FINISH_START_CHANNEL: channel status updated in memory, updating DB...');
                     sql.updateChannelAfterFunding(chan.id, null, 'OPEN', null, function() {
-                        log('FINISH_START_CHANNEL: channel status updated, sending CHANNEL_OPEN');
-                        maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {});
+                        log('FINISH_START_CHANNEL: DB updated, sending CHANNEL_OPEN message');
+                        maxima.sendRaw(fromPubKey, { type: 'CHANNEL_OPEN', channelId: chan.id, tableId: chan.tableId }, function() {
+                            log('FINISH_START_CHANNEL: CHANNEL_OPEN message sent');
+                        });
+                        log('FINISH_START_CHANNEL: refreshing table UI');
                         debouncedRefreshTable(chan.tableId);
+                        log('FINISH_START_CHANNEL: process completed successfully');
                     });
                 });
             });
