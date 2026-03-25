@@ -657,6 +657,28 @@ var messageHandlers = {
                 return;
             }
 
+            // Save game result to history before closing
+            sql.getGameState(message.tableId, function(gameState) {
+                var gameData = {
+                    tableId: message.tableId,
+                    channelId: message.channelId,
+                    players: chan.participants || [],
+                    winner: message.winner || '',
+                    winnerName: message.winnerName || '',
+                    pot: (gameState && gameState.pot) || '0',
+                    settlementTx: chan.settlementTx || '',
+                    fundingTx: chan.fundingTx || '',
+                    gameResult: message.gameResult || {},
+                    txStatus: 'pending'
+                };
+
+                sql.saveGameResult(gameData, function(saveRes) {
+                    if (saveRes && saveRes.status) {
+                        log('Game result saved to history: ' + message.tableId);
+                    }
+                });
+            });
+
             // Close channel independently - each player posts their latest settlement
             chan.closeIndependent(function(closeErr) {
                 if (closeErr) {

@@ -87,6 +87,7 @@
             <div class="lobby-buttons">
                 <button type="button" class="lobby-btn" id="createTable">🃏 &nbsp;Create Table</button>
                 <button type="button" class="lobby-btn" id="activeTablesBtn">🎰 &nbsp;Active Tables</button>
+                <button type="button" class="lobby-btn" id="gameHistoryBtn">📋 &nbsp;Game History</button>
                 <button type="button" class="lobby-btn" id="addContactBtn">➕ &nbsp;Add Contact</button>
                 <button type="button" class="lobby-btn" id="manageContactsBtn">👥 &nbsp;Manage Contacts</button>
             </div>
@@ -289,6 +290,102 @@
             pokerModal.alert('Contact copied!', 'success');
         };
 
+        function showGameHistory() {
+            if (typeof sql === 'undefined' || !sql.getGameHistory) {
+                pokerModal.alert('SQL not ready', 'error');
+                return;
+            }
+
+            sql.getGameHistory(50, function(games) {
+                if (!games || games.length === 0) {
+                    pokerModal.alert('No games found in history.', 'info');
+                    return;
+                }
+
+                var statusLabel = {
+                    'pending':   { text: '⏳ Pending',   color: '#ff9800' },
+                    'completed': { text: '✅ Completed', color: '#4caf50' },
+                    'failed':    { text: '❌ Failed',    color: '#f44336' }
+                };
+
+                var html = '<div style="max-height:70vh;overflow-y:auto;font-size:0.85rem">';
+                html += '<table style="width:100%;border-collapse:collapse">';
+                html += '<tr style="border-bottom:1px solid #444"><th style="text-align:left;padding:6px">Date</th><th style="text-align:left;padding:6px">Winner</th><th style="text-align:left;padding:6px">Pot</th><th style="text-align:left;padding:6px">Status</th><th style="padding:6px">Action</th></tr>';
+
+                for (var i = 0; i < games.length; i++) {
+                    var game = games[i];
+                    var status = (game.txStatus || game.txstatus || 'pending').toLowerCase();
+                    var sl = statusLabel[status] || { text: status, color: '#aaa' };
+
+                    var dateStr = '';
+                    var ts = game.createdAt || game.createdat;
+                    if (ts && ts > 0) {
+                        var d = new Date(parseInt(ts) * (parseInt(ts) < 1e12 ? 1000 : 1));
+                        dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+                    }
+
+                    var winnerName = game.winnerName || game.winnername || 'Unknown';
+                    var pot = game.pot || '0';
+
+                    var actionBtn = '';
+                    if (status === 'pending' || status === 'failed') {
+                        var settlementTx = game.settlementTx || game.settlementtx || '';
+                        if (settlementTx) {
+                            actionBtn = '<button class="gh-resend-btn primary btn-sm" data-gameid="' + game.id + '" data-tx="' + settlementTx + '">Resend TX</button>';
+                        }
+                    }
+
+                    html += '<tr style="border-bottom:1px solid #333">' +
+                        '<td style="padding:6px;white-space:nowrap">' + dateStr + '</td>' +
+                        '<td style="padding:6px">' + winnerName + '</td>' +
+                        '<td style="padding:6px">' + pot + '</td>' +
+                        '<td style="padding:6px"><span style="color:' + sl.color + '">' + sl.text + '</span></td>' +
+                        '<td style="padding:6px">' + actionBtn + '</td></tr>';
+                }
+                html += '</table></div>';
+
+                pokerModal.custom('Game History', html, function(container) {
+                    $(container).on('click', '.gh-resend-btn', function() {
+                        var gameId = $(this).data('gameid');
+                        var settlementTx = $(this).data('tx');
+                        var btn = $(this);
+
+                        btn.prop('disabled', true).text('Sending…');
+
+                        // Import and post the settlement transaction
+                        MDS.cmd('txnimport data:' + settlementTx, function(r1) {
+                            if (!r1 || !r1.status) {
+                                btn.prop('disabled', false).text('Resend TX');
+                                pokerModal.alert('Import failed: ' + (r1 && r1.error ? r1.error : ''), 'error');
+                                return;
+                            }
+
+                            var txnId = r1.response && r1.response.txn && r1.response.txn.id;
+                            if (!txnId) {
+                                btn.prop('disabled', false).text('Resend TX');
+                                pokerModal.alert('No transaction ID returned', 'error');
+                                return;
+                            }
+
+                            MDS.cmd('txnpost id:' + txnId + ' auto:true', function(r2) {
+                                MDS.cmd('txndelete id:' + txnId, function() {});
+
+                                if (r2 && r2.status) {
+                                    btn.text('Sent ✓').removeClass('primary').addClass('secondary');
+                                    // Update status in database
+                                    sql.updateGameTxStatus(gameId, 'completed', function() {});
+                                } else {
+                                    btn.prop('disabled', false).text('Resend TX');
+                                    sql.updateGameTxStatus(gameId, 'failed', function() {});
+                                    pokerModal.alert('Post failed: ' + (r2 && r2.error ? r2.error : ''), 'error');
+                                }
+                            });
+                        });
+                    });
+                });
+            });
+        }
+
         window.deleteContact = function(id) {
             pokerModal.confirm('Delete this contact?', function(ok) {
                 if (!ok) return;
@@ -379,6 +476,7 @@
 
             $('#manageContactsBtn').button().click(function() { toggleSidebar('contacts'); });
             $('#activeTablesBtn').button().click(function() { toggleSidebar('tables'); });
+            $('#gameHistoryBtn').button().click(function() { showGameHistory(); });
 
             // Delegated: contact delete
             $(document).on('click', '.contact-delete', function() {
