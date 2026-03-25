@@ -20,6 +20,7 @@ function PokerGame(tableId, players, blinds, channelId) {
             stack: new Decimal(p.initialStack || 0),
             cards: [],
             bet: new Decimal(0),
+            totalContribution: new Decimal(0),
             folded: false,
             acted: false,
             committed: false,
@@ -119,7 +120,7 @@ PokerGame.prototype._flushDbUpdate = function() {
         })(this.players),
         players: (function(players) {
             return players.map(function(p) {
-                return { pubKey: p.pubKey, name: p.name, stack: p.stack.toString(), folded: p.folded };
+                return { pubKey: p.pubKey, name: p.name, stack: p.stack.toString(), folded: p.folded, totalContribution: p.totalContribution.toString() };
             });
         })(this.players),
         bets: bets,
@@ -333,6 +334,7 @@ PokerGame.prototype.postBlind = function(pos, amount) {
     var bet = Decimal.min(amount, player.stack);
     player.stack = player.stack.minus(bet);
     player.bet = player.bet.plus(bet);
+    player.totalContribution = player.totalContribution.plus(bet);
     this.pot = this.pot.plus(bet);
 };
 
@@ -362,10 +364,12 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
                 // All-in
                 this.pot = this.pot.plus(player.stack);
                 player.bet = player.bet.plus(player.stack);
+                player.totalContribution = player.totalContribution.plus(player.stack);
                 player.stack = new Decimal(0);
             } else {
                 player.stack = player.stack.minus(callAmount);
                 player.bet = player.bet.plus(callAmount);
+                player.totalContribution = player.totalContribution.plus(callAmount);
                 this.pot = this.pot.plus(callAmount);
             }
             this.lastAction = 'call';
@@ -379,6 +383,7 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
             if (additional.greaterThan(player.stack)) return false;
             player.stack = player.stack.minus(additional);
             player.bet = player.bet.plus(additional);
+            player.totalContribution = player.totalContribution.plus(additional);
             this.pot = this.pot.plus(additional);
             this.minRaise = raiseAmount;
             this._lastAggressor = playerIndex; // raise resets who acts last
@@ -491,50 +496,167 @@ PokerGame.prototype.dealCommunity = function(count) {
     }
 };
 
+/**
+ * Build side pots from player contributions.
+ * Returns array of { amount: Decimal, eligible: [player] }
+ * Folded players contribute to pots but are NOT eligible to win.
+ */
+PokerGame.prototype.buildSidePots = function() {
+    // Collect all players who contributed anything (including folded)
+    var contributors = [];
+    for (var i = 0; i < this.players.length; i++) {
+        if (this.players[i].totalContribution.greaterThan(0)) {
+            contributors.push(this.players[i]);
+        }
+    }
+    // Sort by totalContribution ascending
+    contributors.sort(function(a, b) {
+        return a.totalContribution.minus(b.totalContribution).toNumber();
+    });
+
+    var pots = [];
+    var prevLevel = new Decimal(0);
+
+    for (var c = 0; c < contributors.length; c++) {
+        var level = contributors[c].totalContribution;
+        if (level.equals(prevLevel)) continue; // same level, skip
+
+        var slicePerPlayer = level.minus(prevLevel);
+        var potAmount = new Decimal(0);
+        var eligible = [];
+
+        // Every player with contribution >= level contributes this slice
+        for (var j = 0; j < contributors.length; j++) {
+            if (contributors[j].totalContribution.greaterThanOrEqualTo(level)) {
+                potAmount = potAmount.plus(slicePerPlayer);
+            }
+        }
+        // Also count folded players who contributed at least this level
+        // They already contributed, but they are NOT eligible to win
+        // Actually the loop above already counts them in potAmount.
+        // Now collect eligible (non-folded with contribution >= level)
+        for (var k = 0; k < contributors.length; k++) {
+            if (!contributors[k].folded && contributors[k].totalContribution.greaterThanOrEqualTo(level)) {
+                eligible.push(contributors[k]);
+            }
+        }
+
+        if (potAmount.greaterThan(0)) {
+            pots.push({ amount: potAmount, eligible: eligible });
+        }
+        prevLevel = level;
+    }
+    return pots;
+};
+
+/**
+ * Compare two evaluated hands. Returns: >0 if a wins, <0 if b wins, 0 if tie.
+ */
+PokerGame.prototype._compareHands = function(a, b) {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    for (var i = 0; i < a.highCards.length && i < b.highCards.length; i++) {
+        if (a.highCards[i] !== b.highCards[i]) return a.highCards[i] - b.highCards[i];
+    }
+    return 0;
+};
+
 PokerGame.prototype.showdown = function() {
     var active = [];
     for (var i = 0; i < this.players.length; i++) {
         if (!this.players[i].folded) active.push(this.players[i]);
     }
-    var potAmount = this.pot;
+
+    this.lastWinners = [];
+
     if (active.length === 1) {
+        // Everyone else folded — winner takes entire pot
         active[0].stack = active[0].stack.plus(this.pot);
-        this.lastWinners = [{ pubKey: active[0].pubKey, name: active[0].name, amount: potAmount.toString(), desc: 'wins (others folded)' }];
-    } else {
-        var evaluations = [];
-        for (var j = 0; j < active.length; j++) {
-            var p = active[j];
-            evaluations.push({ player: p, hand: this.evaluateHand(p.cards, this.communityCards) });
-        }
-        evaluations.sort(function(a, b) {
-            if (a.hand.rank !== b.hand.rank) return b.hand.rank - a.hand.rank;
-            for (var hc = 0; hc < a.hand.highCards.length && hc < b.hand.highCards.length; hc++) {
-                if (a.hand.highCards[hc] !== b.hand.highCards[hc]) return b.hand.highCards[hc] - a.hand.highCards[hc];
-            }
-            return 0;
+        this.lastWinners.push({
+            pubKey: active[0].pubKey, name: active[0].name,
+            amount: this.pot.toString(), desc: 'wins (others folded)'
         });
-        var bestRank = evaluations[0].hand.rank;
-        var bestHighCards = evaluations[0].hand.highCards;
-        var winners = [];
-        for (var k = 0; k < evaluations.length; k++) {
-            var ev = evaluations[k];
-            if (ev.hand.rank === bestRank) {
-                var isEqual = true;
-                for (var hc2 = 0; hc2 < bestHighCards.length && hc2 < ev.hand.highCards.length; hc2++) {
-                    if (bestHighCards[hc2] !== ev.hand.highCards[hc2]) { isEqual = false; break; }
+    } else {
+        // Evaluate all active hands
+        var handCache = {};
+        for (var h = 0; h < active.length; h++) {
+            handCache[active[h].pubKey] = this.evaluateHand(active[h].cards, this.communityCards);
+        }
+
+        // Build side pots and award each one
+        var sidePots = this.buildSidePots();
+        var winMap = {}; // pubKey -> total won
+
+        for (var sp = 0; sp < sidePots.length; sp++) {
+            var pot = sidePots[sp];
+            var eligible = pot.eligible;
+
+            if (eligible.length === 0) {
+                // No eligible players (all folded) — shouldn't happen after fold check,
+                // but just in case, give to last active player
+                if (active.length > 0) {
+                    var fallback = active[0].pubKey;
+                    winMap[fallback] = (winMap[fallback] || new Decimal(0)).plus(pot.amount);
                 }
-                if (isEqual) winners.push(ev);
+                continue;
+            }
+
+            if (eligible.length === 1) {
+                // Only one eligible — they win this pot
+                var sole = eligible[0].pubKey;
+                winMap[sole] = (winMap[sole] || new Decimal(0)).plus(pot.amount);
+                continue;
+            }
+
+            // Find best hand among eligible
+            var bestHand = handCache[eligible[0].pubKey];
+            for (var e = 1; e < eligible.length; e++) {
+                var cmp = this._compareHands(handCache[eligible[e].pubKey], bestHand);
+                if (cmp > 0) bestHand = handCache[eligible[e].pubKey];
+            }
+
+            // Collect all winners (ties)
+            var potWinners = [];
+            for (var pw = 0; pw < eligible.length; pw++) {
+                if (this._compareHands(handCache[eligible[pw].pubKey], bestHand) === 0) {
+                    potWinners.push(eligible[pw]);
+                }
+            }
+
+            // Split pot among winners
+            var share = pot.amount.dividedToIntegerBy(potWinners.length);
+            var remainder = pot.amount.minus(share.times(potWinners.length));
+            for (var w = 0; w < potWinners.length; w++) {
+                var winAmt = w === 0 ? share.plus(remainder) : share;
+                var pk = potWinners[w].pubKey;
+                winMap[pk] = (winMap[pk] || new Decimal(0)).plus(winAmt);
             }
         }
-        var share = this.pot.dividedToIntegerBy(winners.length);
-        var remainder = this.pot.minus(share.times(winners.length));
-        this.lastWinners = [];
-        for (var w = 0; w < winners.length; w++) {
-            var winAmount = w === 0 ? share.plus(remainder) : share;
-            winners[w].player.stack = winners[w].player.stack.plus(winAmount);
-            this.lastWinners.push({ pubKey: winners[w].player.pubKey, name: winners[w].player.name, amount: winAmount.toString(), desc: winners[w].hand.description });
+
+        // Apply winnings to stacks and build lastWinners
+        for (var wk in winMap) {
+            if (!winMap.hasOwnProperty(wk)) continue;
+            var won = winMap[wk];
+            // Find player
+            for (var pi = 0; pi < this.players.length; pi++) {
+                if (this.players[pi].pubKey === wk) {
+                    this.players[pi].stack = this.players[pi].stack.plus(won);
+                    break;
+                }
+            }
+            this.lastWinners.push({
+                pubKey: wk,
+                name: (function(players, key) {
+                    for (var n = 0; n < players.length; n++) {
+                        if (players[n].pubKey === key) return players[n].name;
+                    }
+                    return '';
+                })(this.players, wk),
+                amount: won.toString(),
+                desc: handCache[wk] ? handCache[wk].description : 'winner'
+            });
         }
     }
+
     this.pot = new Decimal(0);
     this.round = 'finished';
 };
@@ -720,23 +842,33 @@ PokerGame.prototype.cardRank = function(char) {
 // Get state for channel update
 PokerGame.prototype.getChannelState = function() {
     var balances = {};
-    // Start with stacks (stack + pot = total channel money always, since bets are taken from stack and added to pot)
+    // Start with stacks
     for (var i = 0; i < this.players.length; i++) {
         balances[this.players[i].pubKey] = new Decimal(this.players[i].stack);
     }
-    // Distribute unresolved pot evenly among non-folded players; folded players keep only their stack
+    // Distribute unresolved pot using side-pot logic so each player gets fair share
     if (this.pot.greaterThan(0) && this.players.length > 0) {
-        var activePlayers = [];
-        for (var a = 0; a < this.players.length; a++) {
-            if (!this.players[a].folded) activePlayers.push(this.players[a]);
+        var sidePots = this.buildSidePots();
+        for (var sp = 0; sp < sidePots.length; sp++) {
+            var pot = sidePots[sp];
+            var eligible = pot.eligible;
+            // If no eligible (all folded), give to all non-folded, or all players
+            if (eligible.length === 0) {
+                eligible = [];
+                for (var f = 0; f < this.players.length; f++) {
+                    if (!this.players[f].folded) eligible.push(this.players[f]);
+                }
+                if (eligible.length === 0) {
+                    for (var ff = 0; ff < this.players.length; ff++) eligible.push(this.players[ff]);
+                }
+            }
+            var share = pot.amount.dividedToIntegerBy(eligible.length);
+            var remainder = pot.amount.minus(share.times(eligible.length));
+            for (var e = 0; e < eligible.length; e++) {
+                balances[eligible[e].pubKey] = balances[eligible[e].pubKey].plus(share);
+            }
+            balances[eligible[0].pubKey] = balances[eligible[0].pubKey].plus(remainder);
         }
-        var recipients = activePlayers.length > 0 ? activePlayers : this.players;
-        var share = this.pot.dividedToIntegerBy(recipients.length);
-        var remainder = this.pot.minus(share.times(recipients.length));
-        for (var p = 0; p < recipients.length; p++) {
-            balances[recipients[p].pubKey] = balances[recipients[p].pubKey].plus(share);
-        }
-        balances[recipients[0].pubKey] = balances[recipients[0].pubKey].plus(remainder);
     }
     // Convert to strings
     var result = {};
