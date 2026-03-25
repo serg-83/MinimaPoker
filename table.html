@@ -23,7 +23,14 @@
     <div class="container">
         <div class="table-topbar">
             <button type="button" id="backToLobby" class="topbar-btn" onclick="goBackToLobby()">&#8592;</button>
-            <div id="channel-status" class="topbar-channel"></div>
+            <div id="channel-status" class="topbar-channel">
+                <span id="channelStatusLabel"></span>
+                <button type="button" id="createChannelBtn"  class="primary btn-sm" style="display:none">Create Channel</button>
+                <button type="button" id="closeChannelBtn2"  class="primary btn-sm" style="display:none">Close Channel</button>
+                <button type="button" id="cancelChannelBtn"  class="secondary btn-sm" style="display:none">Cancel &amp; Reclaim</button>
+                <span   id="disputeCountdown" style="display:none;font-size:0.75rem;color:#aaa;"></span>
+                <button type="button" id="claimSettleBtn"    class="primary btn-sm"   style="display:none">Claim Funds</button>
+            </div>
         </div>
         <div id="game">
             <div class="poker-table">
@@ -36,7 +43,12 @@
                     <button type="button" class="action-btn raise" id="raiseBtn" disabled>Raise</button>
                     <button type="button" class="action-btn check" id="checkBtn" disabled>Check</button>
                 </div>
-                <div id="phase-controls"></div>
+                <div id="phase-controls">
+                    <div id="phaseMsg"></div>
+                    <button type="button" id="commitBtn"      class="primary btn-sm" style="display:none">Send Commit</button>
+                    <button type="button" id="revealBtn"      class="primary btn-sm" style="display:none">Send Reveal</button>
+                    <button type="button" id="closeChannelBtn" class="primary btn-sm" style="display:none">Close Channel</button>
+                </div>
                 <div id="status"></div>
             </div>
         </div>

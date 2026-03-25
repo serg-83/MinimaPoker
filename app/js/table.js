@@ -175,14 +175,15 @@ var tableUI = {
 
     renderPhaseControls: function() {
         if (!this.gameState) return;
-        var html = '';
-        if (this.gameState.round === 'commit') {
-            html = '<div class="phase-controls"><p>Shuffling deck... (' +
-                (this.myCommitHash ? 'committed' : 'generating...') + ')</p></div>';
-        } else if (this.gameState.round === 'reveal') {
-            html = '<div class="phase-controls"><p>Revealing secrets... (' +
-                (this._revealSent ? 'revealed' : 'sending...') + ')</p></div>';
-        } else if (this.gameState.round === 'finished') {
+        var round = this.gameState.round;
+        $('#commitBtn').toggle(round === 'commit');
+        $('#revealBtn').toggle(round === 'reveal');
+        var msg = '';
+        if (round === 'commit') {
+            msg = 'Shuffling deck... (' + (this.myCommitHash ? 'committed' : 'generating...') + ')';
+        } else if (round === 'reveal') {
+            msg = 'Revealing secrets... (' + (this._revealSent ? 'revealed' : 'sending...') + ')';
+        } else if (round === 'finished') {
             var winners = [];
             try { winners = JSON.parse(this.gameState.lastaction || this.gameState.lastAction || '[]'); } catch(e) {}
             var winText = '';
@@ -195,7 +196,6 @@ var tableUI = {
             } else {
                 winText = 'Hand finished';
             }
-            // Check if any player is bust (stack <= big blind)
             var bb = this.channelInfo ? parseInt((this.channelInfo.blinds || '10/20').split('/')[1] || 20) : 20;
             var bustPlayer = null;
             if (this.channelInfo && this.channelInfo.balances) {
@@ -207,48 +207,34 @@ var tableUI = {
                     }
                 }
             }
-            var nextLine = bustPlayer
-                ? '<p style="color:#f39c12">⚠️ ' + bustPlayer + ' is out of chips!</p><button id="closeChannelBtn" class="primary" style="margin-top:6px">Close Channel</button>'
-                : '<p style="font-size:0.8em;opacity:0.7">Next hand starting...</p>';
-            html = '<div class="phase-controls"><p>🏆 ' + winText.trim() + '</p>' + nextLine + '</div>';
+            msg = '🏆 ' + winText.trim();
+            if (bustPlayer) msg += ' ⚠️ ' + bustPlayer + ' is out of chips!';
+            $('#closeChannelBtn').show();
+        } else {
+            $('#closeChannelBtn').hide();
         }
-        if (html) {
-            $('#phase-controls').html(html);
-            $('#commitBtn').click(function() { tableUI.sendCommit(); });
-            $('#revealBtn').click(function() { tableUI.sendReveal(); });
-            $('#closeChannelBtn').click(function() { tableUI.closeChannelCooperative(); });
+        if (round !== 'commit' && round !== 'reveal') {
+            $('#commitBtn').hide();
+            $('#revealBtn').hide();
         }
+        $('#phaseMsg').text(msg);
     },
 
     renderChannelStatus: function() {
-        var html;
-        if (this.channelInfo) {
-            var s = this.channelInfo.status || 'FUNDING';
-            var color = s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : (s === 'CLOSED' ? 'gray' : (s === 'DISPUTE' ? 'red' : 'red')));
-            html = '<strong>Channel:</strong> <span style="color:' + color + ';">' + s + '</span>';
-            if (s === 'OPEN') {
-                html += ' <button id="closeChannelBtn2" class="primary btn-sm">Close Channel</button>';
-            } else if (s === 'FUNDING') {
-                html += ' <button id="cancelChannelBtn" class="secondary btn-sm">Cancel &amp; Reclaim</button>';
-            } else if (s === 'DISPUTE') {
-                var startBlock = parseInt((this.channelInfo.disputeStartBlock || this.channelInfo.disputestartblock) || 0);
-                var timeout = parseInt((this.channelInfo.timeout) || 30);
-                if (startBlock > 0) {
-                    html += ' <span id="disputeCountdown" style="font-size:0.75rem;color:#aaa;">checking blocks...</span>';
-                    html += ' <button id="claimSettleBtn" class="primary btn-sm" style="display:none">Claim Funds</button>';
-                    this._updateDisputeCountdown(startBlock, timeout);
-                }
-            }
-        } else {
-            html = '<button id="createChannelBtn" class="primary">Create Channel</button>';
+        var s = this.channelInfo ? (this.channelInfo.status || 'FUNDING') : null;
+        var color = !s ? '' : (s === 'OPEN' ? 'green' : (s === 'FUNDING' ? 'orange' : (s === 'CLOSED' ? 'gray' : 'red')));
+        $('#channelStatusLabel').html(s ? '<strong>Channel:</strong> <span style="color:' + color + ';">' + s + '</span>' : '');
+        $('#createChannelBtn').toggle(!s);
+        $('#closeChannelBtn2').toggle(s === 'OPEN');
+        $('#cancelChannelBtn').toggle(s === 'FUNDING');
+        var showDispute = s === 'DISPUTE';
+        $('#disputeCountdown').toggle(showDispute).text(showDispute ? 'checking blocks...' : '');
+        $('#claimSettleBtn').hide();
+        if (showDispute) {
+            var startBlock = parseInt((this.channelInfo.disputeStartBlock || this.channelInfo.disputestartblock) || 0);
+            var timeout = parseInt((this.channelInfo.timeout) || 30);
+            if (startBlock > 0) this._updateDisputeCountdown(startBlock, timeout);
         }
-        var el = document.getElementById('channel-status');
-        if (!el) return;
-        el.innerHTML = html;
-        $('#createChannelBtn').click(function() { tableUI.createChannel(); });
-        $('#closeChannelBtn2').click(function() { tableUI.showCloseChannelDialog(); });
-        $('#cancelChannelBtn').click(function() { tableUI.cancelFundingChannel(); });
-        $('#claimSettleBtn').click(function() { tableUI.claimSettlementNow(); });
     },
 
     _updateDisputeCountdown: function(startBlock, timeout) {
@@ -749,6 +735,13 @@ var tableUI = {
             });
         });
         $('#checkBtn').click(function() { tableUI.sendAction('check'); });
+        $('#commitBtn').click(function() { tableUI.sendCommit(); });
+        $('#revealBtn').click(function() { tableUI.sendReveal(); });
+        $('#closeChannelBtn').click(function() { tableUI.closeChannelCooperative(); });
+        $('#createChannelBtn').click(function() { tableUI.createChannel(); });
+        $('#closeChannelBtn2').click(function() { tableUI.showCloseChannelDialog(); });
+        $('#cancelChannelBtn').click(function() { tableUI.cancelFundingChannel(); });
+        $('#claimSettleBtn').click(function() { tableUI.claimSettlementNow(); });
     },
 
     sendAction: function(action, amount) {
