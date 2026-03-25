@@ -126,11 +126,21 @@
                     });
                 });
             } else if (msg.event === 'MDSCOMMS') {
-                if (msg.data && msg.data.public === false) {
+                MDS.log('TABLE MDSCOMMS received: ' + JSON.stringify(msg.data));
+                if (msg.data) {
                     try {
-                        var m = JSON.parse(msg.data.message);
-                        if (m.type && tableUI.handleServiceMessage) tableUI.handleServiceMessage(m);
-                    } catch (e) {}
+                        var msgData = msg.data.message || msg.data.data || msg.data;
+                        var m = typeof msgData === 'string' ? JSON.parse(msgData) : msgData;
+                        MDS.log('TABLE MDSCOMMS parsed: ' + JSON.stringify(m));
+                        if (m.type) {
+                            MDS.log('TABLE MDSCOMMS type: ' + m.type + ' handler exists: ' + !!tableUI.handleServiceMessage);
+                            if (tableUI.handleServiceMessage) {
+                                tableUI.handleServiceMessage(m);
+                            }
+                        }
+                    } catch (e) {
+                        MDS.log('TABLE MDSCOMMS parse error: ' + e);
+                    }
                 }
             } else if (msg.event === 'MAXIMA') {
                 maxima.handleIncoming(msg);

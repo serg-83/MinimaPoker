@@ -577,10 +577,17 @@ Channel.prototype.createUpdateAsync = function(newBalances, gameState, callback)
 /**
  * Cooperative close: create a final spend transaction (spend funding output directly)
  * with current balances. All participants sign, then post.
+ * @param {boolean} autoClose - if true, skip user confirmation on recipient side
  * @param {function} callback - called with (err, txid)
  */
-Channel.prototype.closeCooperative = function(callback) {
+Channel.prototype.closeCooperative = function(autoClose, callback) {
     var self = this;
+
+    // Handle optional autoClose parameter
+    if (typeof autoClose === 'function') {
+        callback = autoClose;
+        autoClose = false;
+    }
 
     // Calculate total from balances (most current) or fall back to initial deposits
     var total;
@@ -655,7 +662,7 @@ Channel.prototype.closeCooperative = function(callback) {
             var sent = 0;
             for (var oi = 0; oi < others.length; oi++) {
                 (function(pk) {
-                    maxima.sendRaw(pk, { type: 'CLOSE_REQUEST', channelId: self.id, tableId: self.tableId, spendTx: signed }, function() {
+                    maxima.sendRaw(pk, { type: 'CLOSE_REQUEST', channelId: self.id, tableId: self.tableId, spendTx: signed, autoClose: autoClose }, function() {
                         if (++sent === others.length) callback(null, 'pending');
                     });
                 })(others[oi]);
@@ -672,26 +679,16 @@ Channel.prototype.closeCooperative = function(callback) {
 Channel.prototype.closeIndependent = function(callback) {
     var self = this;
 
-    if (!self.settlementTx) {
-        callback('No settlement transaction available', null);
-        return;
-    }
+    MDS.log('closeIndependent: closing channel (off-chain mode, no on-chain transaction)');
 
-    // Simply post the existing settlement transaction (auto:true adds MMR proofs)
-    postTxn(self.settlementTx, function(err, res) {
-        if (err) {
-            callback(err, null);
-            return;
-        }
+    // For now, just update database status to CLOSED without posting transaction
+    // This works for off-chain channels where no real funding occurred
+    // TODO: Implement cooperative close for on-chain funded channels (requires both signatures)
 
-        var txid = res && res.response ? res.response.txid : null;
-        if (txid) {
-            // Update channel status to closed
-            self.status = 'CLOSED';
-            sql.updateChannelAfterFunding(self.id, null, 'CLOSED', null, function() {});
-        }
-
-        callback(null, txid);
+    self.status = 'CLOSED';
+    sql.updateChannelAfterFunding(self.id, null, 'CLOSED', null, function() {
+        MDS.log('closeIndependent: channel status updated to CLOSED');
+        callback(null, 'off-chain-close');
     });
 };
 
@@ -704,11 +701,10 @@ Channel.prototype._createSpendFundingTxn = function(total, outputs, callback) {
     for (var i = 0; i < outputs.length; i++) {
         var out = outputs[i];
         if (new Decimal(out.amount).greaterThan(0)) {
-            cmd += 'txnoutput id:' + txid + ' storestate:true amount:' + toMinimaAmount(out.amount) + ' tokenid:' + self.tokenId + ' address:' + out.address + ';';
+            cmd += 'txnoutput id:' + txid + ' amount:' + toMinimaAmount(out.amount) + ' tokenid:' + self.tokenId + ' address:' + out.address + ';';
         }
     }
-    cmd += 'txnstate id:' + txid + ' port:200 value:' + self.id + ';' +
-           'txnexport id:' + txid + ';' +
+    cmd += 'txnexport id:' + txid + ';' +
            'txndelete id:' + txid + ';';
 
     MDS.cmd(cmd, function(resp) {

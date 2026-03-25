@@ -137,20 +137,65 @@ PokerGame.prototype._flushDbUpdate = function() {
             for (var i = 0; i < self.players.length; i++) {
                 if (self.players[i].pubKey < myMaxKey) { isEnforcer = false; break; }
             }
+
+            var sendGameEnd = function() {
+                if (typeof MDS !== 'undefined' && MDS.comms) {
+                    // Prepare game result data
+                    var winner = '';
+                    var winnerName = '';
+                    var potAmount = '0';
+
+                    MDS.log('[DEBUG sendGameEnd] lastWinners: ' + JSON.stringify(self.lastWinners));
+
+                    if (self.lastWinners && self.lastWinners.length > 0) {
+                        winner = self.lastWinners[0].pubKey || '';
+                        winnerName = self.lastWinners[0].name || '';
+                        // Get pot from winner's amount since self.pot is already reset to 0
+                        potAmount = self.lastWinners[0].amount || '0';
+                        MDS.log('[DEBUG sendGameEnd] winner=' + winner + ' winnerName=' + winnerName + ' pot=' + potAmount);
+                    } else {
+                        MDS.log('[DEBUG sendGameEnd] lastWinners is empty or undefined!');
+                    }
+
+                    // Collect all players' final stacks
+                    var finalStacks = {};
+                    for (var i = 0; i < self.players.length; i++) {
+                        var p = self.players[i];
+                        if (p && p.pubKey) {
+                            finalStacks[p.pubKey] = p.stack ? p.stack.toString() : '0';
+                        }
+                    }
+
+                    MDS.comms.solo(JSON.stringify({
+                        type: 'GAME_END_AUTO_CLOSE',
+                        tableId: self.tableId,
+                        channelId: self.channelId,
+                        winner: winner,
+                        winnerName: winnerName,
+                        pot: potAmount,
+                        gameResult: self.lastWinners || [],
+                        finalStacks: finalStacks
+                    }));
+                }
+            };
+
             if (isEnforcer) {
+                // Enforcer sends final channel update, then triggers game end
                 sendChannelUpdate(self, function(ok) {
                     if (!ok) MDS.log('showdown: sendChannelUpdate failed');
-                    // After channel update, trigger automatic game end
-                    setTimeout(function() {
-                        if (typeof MDS !== 'undefined' && MDS.comms) {
-                            MDS.comms.solo(JSON.stringify({
-                                type: 'GAME_END_AUTO_CLOSE',
-                                tableId: self.tableId,
-                                channelId: self.channelId
-                            }));
-                        }
-                    }, 2000); // 2 second delay to show results
+                    if (typeof setTimeout !== 'undefined') {
+                        setTimeout(sendGameEnd, 2000); // 2 second delay to show results
+                    } else {
+                        sendGameEnd(); // Rhino has no setTimeout — call directly
+                    }
                 });
+            } else {
+                // Non-enforcer also triggers game end for independent channel close
+                if (typeof setTimeout !== 'undefined') {
+                    setTimeout(sendGameEnd, 2000); // 2 second delay to show results
+                } else {
+                    sendGameEnd(); // Rhino has no setTimeout — call directly
+                }
             }
         }
     });

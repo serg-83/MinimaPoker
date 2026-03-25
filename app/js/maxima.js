@@ -2,10 +2,10 @@
  * maxima.js – P2P communication layer for Minima Poker (ES5/Rhino compatible)
  */
 
-var messageHandlers = {};
+var maximaMessageHandlers = {};
 
 function registerHandler(type, handler) {
-    messageHandlers[type] = handler;
+    maximaMessageHandlers[type] = handler;
 }
 
 // sendWithAck = sendRaw (ACK/SYNACK removed — caused cross-context issues)
@@ -65,6 +65,7 @@ function sendRaw(toPubKey, message, callback) {
 
 function initMaxima() {
     MDS.log('Maxima listener initialized');
+    // Note: messageHandlers from service.js will be registered separately
 }
 
 function handleIncoming(msg) {
@@ -84,7 +85,7 @@ function handleIncoming(msg) {
             var jsonstr = decodeURIComponent(conv.response.conversion.split("%27").join("'"));
             var message = JSON.parse(jsonstr);
             MDS.log("MAXIMA dispatch: type=" + message.type);
-            var handler = messageHandlers[message.type] || messageHandlers['*'];
+            var handler = maximaMessageHandlers[message.type] || maximaMessageHandlers['*'];
             if (handler) {
                 handler(message, fromPubKey);
             } else {

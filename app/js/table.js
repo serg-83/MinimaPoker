@@ -18,6 +18,7 @@ var tableUI = {
     _turnTimer:      null,
     _phaseTimer:     null,
     _readyPlayers:   {},
+    _prevChannelStatus: null,
     TURN_TIMEOUT:    60000,
     PHASE_TIMEOUT:   40000,
 
@@ -27,18 +28,30 @@ var tableUI = {
         this.loadGameState();
         this.setupMaximaHandlers();
         this.setupEventListeners();
+
+        // Poll channel status every 3 seconds to detect OPEN status and trigger auto-start
+        var self = this;
+        this._channelPollInterval = setInterval(function() {
+            self.loadChannelInfo();
+        }, 3000);
     },
 
     loadChannelInfo: function() {
         var self = this;
-        var prevStatus = this.channelInfo ? (this.channelInfo.status || this.channelInfo.STATUS) : null;
+        MDS.log('TABLE loadChannelInfo: tableId=' + this.tableId + ' prevStatus=' + this._prevChannelStatus);
         sql.getChannelByTable(this.tableId, function(ch) {
             self.channelInfo = ch;
             self.renderChannelStatus();
             var newStatus = ch ? (ch.status || ch.STATUS) : null;
-            if (newStatus === 'OPEN' && prevStatus !== 'OPEN' && self._isEnforcer()) {
+            MDS.log('TABLE loadChannelInfo: newStatus=' + newStatus + ' prevStatus=' + self._prevChannelStatus + ' isEnforcer=' + self._isEnforcer());
+            if (newStatus === 'OPEN' && self._prevChannelStatus !== 'OPEN' && self._isEnforcer()) {
+                MDS.log('TABLE loadChannelInfo: triggering auto-start game');
                 self._autoStartGame();
+            } else {
+                MDS.log('TABLE loadChannelInfo: auto-start conditions not met - newStatus=' + newStatus + ' prevStatus=' + self._prevChannelStatus + ' isEnforcer=' + self._isEnforcer());
             }
+            // Update prevStatus for next check
+            self._prevChannelStatus = newStatus;
         });
     },
 
@@ -244,8 +257,23 @@ var tableUI = {
     // Auto-triggered by enforcer when channel opens
     _autoStartGame: function() {
         var self = this;
+        MDS.log('TABLE _autoStartGame: starting for tableId=' + this.tableId);
+        MDS.log('TABLE _autoStartGame: players count=' + (this.players ? this.players.length : 0));
+        MDS.log('TABLE _autoStartGame: channelInfo=' + JSON.stringify(this.channelInfo));
+
+        // Check if players are loaded
+        if (!this.players || this.players.length === 0) {
+            MDS.log('TABLE _autoStartGame: players not loaded yet, aborting auto-start');
+            return;
+        }
+
         sql.getTableById(this.tableId, function(table) {
-            if (!table) return;
+            if (!table) {
+                MDS.log('TABLE _autoStartGame: table not found');
+                return;
+            }
+            MDS.log('TABLE _autoStartGame: table found, blinds=' + (table.blinds || table.BLINDS));
+
             var parts  = (table.blinds || table.BLINDS || '10/20').split('/');
             var buyIn  = parseInt(table.buyIn || table.BUYIN || 1000);
             // Attach initialStack to each player from buyIn
@@ -259,6 +287,8 @@ var tableUI = {
                     initialStack: buyIn
                 });
             }
+            MDS.log('TABLE _autoStartGame: prepared players=' + JSON.stringify(playersWithStack));
+
             var gameMsg = {
                 type: 'GAME_START',
                 tableId: self.tableId,
@@ -266,10 +296,16 @@ var tableUI = {
                 players: playersWithStack,
                 blinds: { small: parts[0], big: parts[1] }
             };
+            MDS.log('TABLE _autoStartGame: sending GAME_START message=' + JSON.stringify(gameMsg));
+
             // Send to service (enforcer's own node) via comms
             MDS.comms.solo(JSON.stringify(gameMsg));
             self._sendToAllPlayers(gameMsg, function(ok) {
-                if (!ok) MDS.log('Auto-start game failed, will retry on next channel update');
+                if (!ok) {
+                    MDS.log('Auto-start game failed, will retry on next channel update');
+                } else {
+                    MDS.log('Auto-start game message sent successfully');
+                }
             });
         });
     },
@@ -552,13 +588,29 @@ var tableUI = {
     // The player with the lexicographically smallest pubKey acts as enforcer.
     // This way if the host disconnects, another player takes over.
     _isEnforcer: function() {
-        if (!this.players || this.players.length === 0) return this.isCreator;
+        MDS.log('TABLE _isEnforcer: checking enforcer status');
+        MDS.log('TABLE _isEnforcer: players=' + JSON.stringify(this.players));
+        MDS.log('TABLE _isEnforcer: myMaximaKey=' + window.myMaximaKey);
+        MDS.log('TABLE _isEnforcer: isCreator=' + this.isCreator);
+
+        if (!this.players || this.players.length === 0) {
+            MDS.log('TABLE _isEnforcer: no players, using isCreator=' + this.isCreator);
+            return this.isCreator;
+        }
+
         var minKey = null;
         for (var i = 0; i < this.players.length; i++) {
             var pk = this.players[i].playerPubKey;
-            if (!minKey || pk < minKey) minKey = pk;
+            MDS.log('TABLE _isEnforcer: checking player ' + i + ' pubKey=' + pk);
+            if (!minKey || pk < minKey) {
+                minKey = pk;
+                MDS.log('TABLE _isEnforcer: new minKey=' + minKey);
+            }
         }
-        return window.myMaximaKey === minKey;
+
+        var isEnforcer = window.myMaximaKey === minKey;
+        MDS.log('TABLE _isEnforcer: final result - minKey=' + minKey + ' myKey=' + window.myMaximaKey + ' isEnforcer=' + isEnforcer);
+        return isEnforcer;
     },
 
     updateControls: function() {
@@ -723,6 +775,18 @@ var tableUI = {
     },
 
     handleServiceMessage: function(message) {
+        MDS.log('TABLE handleServiceMessage: type=' + message.type + ' tableId=' + (message.tableId || 'none'));
+
+        if (message.type === 'REFRESH_TABLE') {
+            if (!message.tableId || message.tableId === this.tableId) {
+                MDS.log('TABLE handleServiceMessage: processing REFRESH_TABLE for tableId=' + this.tableId);
+                this.loadChannelInfo();
+                this.loadGameState();
+                this._markDirty('all');
+            }
+            return;
+        }
+
         if (message.type === 'CHANNEL_REQUEST') { handleChannelRequest(message); return; }
         if (message.type === 'CHANNEL_DENIED') { pokerModal.alert('Channel request denied', 'error'); return; }
         if (message.type === 'PLAYER_BUST' && message.tableId === this.tableId) {

@@ -235,10 +235,15 @@ MDS.init(function(msg) {
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
-            if (commsMsg && commsMsg.type && allowedCommsTypes[commsMsg.type] && messageHandlers[commsMsg.type]) {
-                messageHandlers[commsMsg.type](commsMsg, myMaximaKey);
+
+            if (commsMsg && commsMsg.type) {
+                if (allowedCommsTypes[commsMsg.type] && messageHandlers[commsMsg.type]) {
+                    messageHandlers[commsMsg.type](commsMsg, myMaximaKey);
+                }
             }
-        } catch(e) { log('MDSCOMMS parse error: ' + e); }
+        } catch(e) {
+            MDS.log('MDSCOMMS ERROR: ' + e);
+        }
     }
 });
 
@@ -606,6 +611,34 @@ var messageHandlers = {
                 return;
             }
 
+            // If autoClose flag is set, automatically sign and post without user confirmation
+            if (message.autoClose) {
+                MDS.log('CLOSE_REQUEST: autoClose=true, signing and posting automatically');
+                var myMaxKey = getMyMaximaKey();
+                var myWalletKey = '';
+                for (var i = 0; i < chan.participants.length; i++) {
+                    if (chan.participants[i].pubKey === myMaxKey) {
+                        myWalletKey = chan.participants[i].walletKey || '';
+                        break;
+                    }
+                }
+                if (!myWalletKey) myWalletKey = getMyWalletKey();
+                signTxnAsync(message.spendTx, myWalletKey, function(err, signed) {
+                    if (err) { log('CLOSE_REQUEST autoClose sign error: ' + err); return; }
+                    postTxnAsync(signed, function(err) {
+                        if (err) { log('CLOSE_REQUEST autoClose post error: ' + err); return; }
+                        chan.status = 'CLOSED';
+                        sql.saveChannelSpendTx(chan.id, signed, function() {
+                            channel.set(chan.id, chan);
+                            maxima.sendRaw(fromPubKey, { type: 'CLOSE_ACCEPT', channelId: chan.id, tableId: chan.tableId }, function() {});
+                            MDS.comms.solo(JSON.stringify({ type: 'CHANNEL_CLOSED', tableId: chan.tableId, channelId: chan.id }));
+                            debouncedRefreshTable(chan.tableId);
+                        });
+                    });
+                });
+                return;
+            }
+
             // Forward to browser for user confirmation
             MDS.comms.solo(JSON.stringify({
                 type: 'CLOSE_REQUEST_UI',
@@ -669,15 +702,23 @@ var messageHandlers = {
 
     GAME_END_AUTO_CLOSE: function(message, fromPubKey) {
         // Auto-close game after showdown - close channel and delete table
-        log('Auto-closing game: table=' + message.tableId + ' channel=' + message.channelId);
+        MDS.log('GAME_END_AUTO_CLOSE: starting for table=' + message.tableId + ' channel=' + message.channelId);
 
         getChannel(message.channelId, function(err, chan) {
             if (err || !chan) {
-                log('GAME_END_AUTO_CLOSE: channel not found ' + message.channelId);
+                MDS.log('GAME_END_AUTO_CLOSE: ERROR - channel not found: ' + message.channelId + ' err=' + err);
                 return;
             }
 
+            MDS.log('GAME_END_AUTO_CLOSE: channel found, closing...');
+
+            // Update channel balances with final stacks from game result
+            if (message.finalStacks) {
+                chan.balances = message.finalStacks;
+            }
+
             // Save game result to history before closing
+            MDS.log('[DEBUG GAME_END_AUTO_CLOSE] message: ' + JSON.stringify({winner: message.winner, winnerName: message.winnerName, pot: message.pot}));
             sql.getGameState(message.tableId, function(gameState) {
                 var gameData = {
                     tableId: message.tableId,
@@ -685,31 +726,34 @@ var messageHandlers = {
                     players: chan.participants || [],
                     winner: message.winner || '',
                     winnerName: message.winnerName || '',
-                    pot: (gameState && gameState.pot) || '0',
+                    pot: message.pot || '0',
                     settlementTx: chan.settlementTx || '',
                     fundingTx: chan.fundingTx || '',
                     gameResult: message.gameResult || {},
                     txStatus: 'pending'
                 };
+                MDS.log('[DEBUG GAME_END_AUTO_CLOSE] gameData: ' + JSON.stringify({winner: gameData.winner, winnerName: gameData.winnerName, pot: gameData.pot}));
 
                 sql.saveGameResult(gameData, function(saveRes) {
                     if (saveRes && saveRes.status) {
-                        log('Game result saved to history: ' + message.tableId);
+                        MDS.log('GAME_END_AUTO_CLOSE: game result saved to history');
                     }
                 });
             });
 
-            // Close channel independently - each player posts their latest settlement
-            chan.closeIndependent(function(closeErr) {
+            // Close channel cooperatively with autoClose flag - one player creates and signs, other signs and posts automatically
+            chan.closeCooperative(true, function(closeErr) {
                 if (closeErr) {
-                    log('GAME_END_AUTO_CLOSE: independent close failed: ' + closeErr);
+                    MDS.log('GAME_END_AUTO_CLOSE: ERROR - cooperative close failed: ' + closeErr);
                     return;
                 }
 
-                log('GAME_END_AUTO_CLOSE: channel closed successfully');
+                MDS.log('GAME_END_AUTO_CLOSE: channel closed successfully, deleting table...');
 
                 // Delete table and notify players to return to lobby
                 sql.deleteTable(message.tableId, function() {
+                    MDS.log('GAME_END_AUTO_CLOSE: table deleted, notifying players...');
+
                     // Notify all players that game ended and they should return to lobby
                     sql.getPlayers(message.tableId, function(players) {
                         if (players) {
@@ -726,6 +770,7 @@ var messageHandlers = {
                         }
 
                         // Notify local UI to return to lobby
+                        MDS.log('GAME_END_AUTO_CLOSE: sending GAME_ENDED_RETURN_LOBBY to UI');
                         MDS.comms.solo(JSON.stringify({
                             type: 'GAME_ENDED_RETURN_LOBBY',
                             tableId: message.tableId
@@ -786,5 +831,38 @@ var messageHandlers = {
     REVEAL: function(message, fromPubKey) {
         var game = poker.getGame(message.tableId);
         if (game) { game.receiveReveal(message.playerPubKey, message.secret); debouncedRefreshTable(message.tableId); }
+    },
+
+    GAME_ENDED: function(message, fromPubKey) {
+        // Forward to UI
+        MDS.comms.solo(JSON.stringify(message));
+    },
+
+    CLOSE_BLOCKED: function(message, fromPubKey) {
+        // Forward to UI
+        MDS.comms.solo(JSON.stringify(message));
+    },
+
+    CLOSE_REJECTED: function(message, fromPubKey) {
+        // Forward to UI
+        MDS.comms.solo(JSON.stringify(message));
     }
 };
+
+// Make messageHandlers globally available for maxima registration
+if (typeof window !== 'undefined') {
+    window.messageHandlers = messageHandlers;
+} else if (typeof global !== 'undefined') {
+    global.messageHandlers = messageHandlers;
+}
+
+// Register all message handlers with maxima after messageHandlers is fully defined
+MDS.log('Attempting to register message handlers with maxima...');
+if (typeof maxima !== 'undefined' && maxima.registerHandler) {
+    for (var msgType in messageHandlers) {
+        maxima.registerHandler(msgType, messageHandlers[msgType]);
+    }
+    MDS.log('Registered ' + Object.keys(messageHandlers).length + ' message handlers with maxima');
+} else {
+    MDS.log('maxima not available for handler registration at end of service.js');
+}
