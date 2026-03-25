@@ -1243,6 +1243,7 @@ h1::after {
 /* ===== RESET / BASE (table page only) ===== */
 body.table-page {
     height: 100%;
+    height: 100dvh;
     width: 100%;
     overflow: hidden;
 }
@@ -1258,6 +1259,7 @@ body.table-page {
 .container {
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     max-width: 100%;
     margin: 0;
     padding: 0;
@@ -1295,7 +1297,7 @@ body.table-page {
 #game {
     position: absolute;
     inset: 0;
-    bottom: 60px; /* leave room for controls bar */
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1529,7 +1531,8 @@ body.table-page {
     z-index: 50;
     background: rgba(0,0,0,0.85);
     padding: 12px 16px;
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    /* Account for browser UI (address bar, home indicator) */
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 12px));
     border-top: 2px solid var(--gold);
     -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
