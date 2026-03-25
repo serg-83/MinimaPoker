@@ -113,10 +113,14 @@ PokerGame.prototype._flushDbUpdate = function() {
         playerCards: (function(players) {
             var result = [];
             for (var i = 0; i < players.length; i++) {
-                // Store only card count, not actual cards — each client derives their own from seed
                 result.push({ pubKey: players[i].pubKey, cardCount: players[i].cards.length });
             }
             return result;
+        })(this.players),
+        players: (function(players) {
+            return players.map(function(p) {
+                return { pubKey: p.pubKey, name: p.name, stack: p.stack.toString(), folded: p.folded };
+            });
         })(this.players),
         bets: bets,
         turn: this.currentPlayer,
@@ -307,15 +311,21 @@ PokerGame.prototype.dealCards = function() {
 
 // ---------- Game start ----------
 PokerGame.prototype.startGame = function() {
-    // Derive dealer position deterministically from the combined seed
     this.dealer = parseInt(this.seed.substring(0, 8), 16) % this.players.length;
     this.smallBlindPos = (this.dealer + 1) % this.players.length;
     this.bigBlindPos   = (this.dealer + 2) % this.players.length;
-    // Post blinds
     this.postBlind(this.smallBlindPos, this.blinds.small);
     this.postBlind(this.bigBlindPos, this.blinds.big);
     this.round = 'preflop';
+    // Preflop: action starts left of BB; BB gets option last
     this.currentPlayer = (this.bigBlindPos + 1) % this.players.length;
+    // Skip folded/all-in players
+    while (this.players[this.currentPlayer].folded || this.players[this.currentPlayer].stack.equals(0)) {
+        this.currentPlayer = (this.currentPlayer + 1) % this.players.length;
+    }
+    // BB has not acted yet (gets option)
+    this.players[this.bigBlindPos].acted = false;
+    this._lastAggressor = this.bigBlindPos; // BB is last to act preflop unless raised
 };
 
 PokerGame.prototype.postBlind = function(pos, amount) {
@@ -331,13 +341,9 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
     if (amount === undefined) amount = null;
     var playerIndex = -1;
     for (var i = 0; i < this.players.length; i++) {
-        if (this.players[i].pubKey === playerPubKey) {
-            playerIndex = i;
-            break;
-        }
+        if (this.players[i].pubKey === playerPubKey) { playerIndex = i; break; }
     }
     if (playerIndex !== this.currentPlayer) return false;
-
     var player = this.players[playerIndex];
     if (player.folded) return false;
 
@@ -345,12 +351,10 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
         case 'fold':
             player.folded = true;
             this.lastAction = 'fold';
-            this.advanceTurn();
             break;
         case 'check':
             if (this.getCurrentBet().greaterThan(player.bet)) return false;
             this.lastAction = 'check';
-            this.advanceTurn();
             break;
         case 'call':
             var callAmount = this.getCurrentBet().minus(player.bet);
@@ -365,13 +369,11 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
                 this.pot = this.pot.plus(callAmount);
             }
             this.lastAction = 'call';
-            this.advanceTurn();
             break;
         case 'raise':
             if (amount === null) return false;
             var raiseAmount = new Decimal(amount);
-            var minRaise = this.minRaise;
-            if (raiseAmount.lessThan(minRaise)) return false;
+            if (raiseAmount.lessThan(this.minRaise)) return false;
             var totalBet = this.getCurrentBet().plus(raiseAmount);
             var additional = totalBet.minus(player.bet);
             if (additional.greaterThan(player.stack)) return false;
@@ -379,12 +381,14 @@ PokerGame.prototype.act = function(playerPubKey, action, amount) {
             player.bet = player.bet.plus(additional);
             this.pot = this.pot.plus(additional);
             this.minRaise = raiseAmount;
+            this._lastAggressor = playerIndex; // raise resets who acts last
             this.lastAction = 'raise';
-            this.advanceTurn();
             break;
         default:
             return false;
     }
+    player.acted = true;
+    this.advanceTurn();
     return true;
 };
 
@@ -398,20 +402,22 @@ PokerGame.prototype.getCurrentBet = function() {
 };
 
 PokerGame.prototype.advanceTurn = function() {
-    this.players[this.currentPlayer].acted = true;
-    var next = (this.currentPlayer + 1) % this.players.length;
-    var laps = 0;
-    while (laps < this.players.length) {
-        if (!this.players[next].folded) {
-            this.currentPlayer = next;
-            break;
-        }
-        next = (next + 1) % this.players.length;
-        laps++;
+    // Find next player who can act (not folded, not all-in)
+    var n = this.players.length;
+    var next = (this.currentPlayer + 1) % n;
+    var checked = 0;
+    while (checked < n) {
+        var p = this.players[next];
+        if (!p.folded && p.stack.greaterThan(0)) break;
+        next = (next + 1) % n;
+        checked++;
     }
+
     if (this.isRoundComplete()) {
         this.nextRound();
+        return;
     }
+    this.currentPlayer = next;
 };
 
 PokerGame.prototype.isRoundComplete = function() {
@@ -419,12 +425,18 @@ PokerGame.prototype.isRoundComplete = function() {
     for (var i = 0; i < this.players.length; i++) {
         if (!this.players[i].folded) active.push(this.players[i]);
     }
+    // Only one player left
     if (active.length === 1) return true;
+
     var currentBet = this.getCurrentBet();
     for (var j = 0; j < active.length; j++) {
         var p = active[j];
+        // Skip all-in players — they can't act but round isn't over because of them
+        if (p.stack.equals(0)) continue;
+        // Player hasn't acted yet
         if (!p.acted) return false;
-        if (!p.bet.equals(currentBet) && p.stack.greaterThan(0)) return false;
+        // Player hasn't matched the current bet (and isn't all-in)
+        if (!p.bet.equals(currentBet)) return false;
     }
     return true;
 };
@@ -434,6 +446,8 @@ PokerGame.prototype.nextRound = function() {
         this.players[i].bet = new Decimal(0);
         this.players[i].acted = false;
     }
+    this.minRaise = this.blinds.big;
+
     if (this.round === 'preflop') {
         this.round = 'flop';
         this.dealCommunity(3);
@@ -448,17 +462,27 @@ PokerGame.prototype.nextRound = function() {
         this.showdown();
         return;
     }
-    // If only one player left (everyone else folded), go straight to showdown
-    var stillActive = 0;
+
+    // Check if only one active player
+    var canAct = [];
     for (var sa = 0; sa < this.players.length; sa++) {
-        if (!this.players[sa].folded) stillActive++;
+        if (!this.players[sa].folded && this.players[sa].stack.greaterThan(0)) canAct.push(sa);
     }
-    if (stillActive === 1) { this.round = 'showdown'; this.showdown(); return; }
+    if (canAct.length <= 1) {
+        // All remaining players are all-in or only one left — run out the board
+        if (this.round === 'flop') { this.dealCommunity(1); this.round = 'turn'; }
+        if (this.round === 'turn') { this.dealCommunity(1); this.round = 'river'; }
+        if (this.round === 'river') { this.round = 'showdown'; this.showdown(); }
+        return;
+    }
+
+    // Post-flop: action starts left of dealer (SB position), skip folded/all-in
     this.currentPlayer = (this.dealer + 1) % this.players.length;
-    while (this.players[this.currentPlayer].folded) {
+    var tries = 0;
+    while ((this.players[this.currentPlayer].folded || this.players[this.currentPlayer].stack.equals(0)) && tries < this.players.length) {
         this.currentPlayer = (this.currentPlayer + 1) % this.players.length;
+        tries++;
     }
-    this.minRaise = this.blinds.big;
 };
 
 PokerGame.prototype.dealCommunity = function(count) {

@@ -405,7 +405,17 @@ var tableUI = {
             var pos = positions[i];
             var isMe = (i === this.myPlayerIndex);
             var stack;
-            if (this.channelInfo && this.channelInfo.balances && this.channelInfo.balances[p.playerPubKey]) {
+            // During game: use stack from gameState if available (more current than channel balance)
+            var gsPlayers = (state && state.players) ? (typeof state.players === 'string' ? JSON.parse(state.players) : state.players) : null;
+            var gsPlayer = null;
+            if (gsPlayers) {
+                for (var gsi = 0; gsi < gsPlayers.length; gsi++) {
+                    if (gsPlayers[gsi].pubKey === p.playerPubKey) { gsPlayer = gsPlayers[gsi]; break; }
+                }
+            }
+            if (gsPlayer && gsPlayer.stack !== undefined) {
+                stack = gsPlayer.stack;
+            } else if (this.channelInfo && this.channelInfo.balances && this.channelInfo.balances[p.playerPubKey]) {
                 stack = this.channelInfo.balances[p.playerPubKey];
             } else {
                 stack = '?';

@@ -40,7 +40,7 @@ var SQL = {
                 'state TEXT, signatures TEXT, createdAt BIGINT)',
             'CREATE TABLE IF NOT EXISTS game_states (' +
                 'tableId TEXT PRIMARY KEY, round TEXT, pot TEXT, communityCards TEXT, ' +
-                'playerCards TEXT, players TEXT, turn INTEGER, lastAction TEXT, commits TEXT, reveals TEXT)',
+                'playerCards TEXT, players TEXT, bets TEXT, turn INTEGER, lastAction TEXT, commits TEXT, reveals TEXT)',
             'CREATE TABLE IF NOT EXISTS logs (' +
                 'hashId TEXT, timestamp BIGINT, event TEXT, details TEXT)',
             'CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY)'
@@ -53,7 +53,23 @@ var SQL = {
                     // v2 done — check v3 (add spendTx, closedAt to channels)
                     MDS.sql("SELECT version FROM _schema_version WHERE version=3", function(v3res) {
                         if (v3res && v3res.status && v3res.rows && v3res.rows.length > 0) {
-                            runCreates();
+                            // v3 done — check v4 (add bets column to game_states)
+                            MDS.sql("SELECT version FROM _schema_version WHERE version=4", function(v4res) {
+                                if (v4res && v4res.status && v4res.rows && v4res.rows.length > 0) {
+                                    runCreates();
+                                } else {
+                                    var m4 = [
+                                        "ALTER TABLE game_states ADD COLUMN bets TEXT DEFAULT '{}'",
+                                        "INSERT INTO _schema_version (version) VALUES (4)"
+                                    ];
+                                    var mi4 = 0;
+                                    function runM4() {
+                                        if (mi4 >= m4.length) { runCreates(); return; }
+                                        MDS.sql(m4[mi4++], function() { runM4(); });
+                                    }
+                                    runM4();
+                                }
+                            });
                         } else {
                             var m3 = [
                                 "ALTER TABLE channels ADD COLUMN spendTx TEXT DEFAULT ''",
@@ -77,7 +93,8 @@ var SQL = {
                         'DROP TABLE IF EXISTS logs',
                         'DELETE FROM _schema_version',
                         'INSERT INTO _schema_version (version) VALUES (2)',
-                        'INSERT INTO _schema_version (version) VALUES (3)'
+                        'INSERT INTO _schema_version (version) VALUES (3)',
+                        'INSERT INTO _schema_version (version) VALUES (4)'
                     ];
                     var mi = 0;
                     function runMigrations() {
@@ -390,9 +407,11 @@ var SQL = {
 
     // -------------------- Game states --------------------
     setGameState: function(state, callback) {
-        var q = 'MERGE INTO game_states (tableId, round, pot, communityCards, playerCards, players, turn, lastAction, commits, reveals) KEY(tableId) VALUES (' +
+        var q = 'MERGE INTO game_states (tableId, round, pot, communityCards, playerCards, players, bets, turn, lastAction, commits, reveals) KEY(tableId) VALUES (' +
             this._esc(state.tableId) + ',' + this._esc(state.round) + ',' + this._esc(state.pot) + ',' +
-            this._esc(JSON.stringify(state.communityCards || [])) + ',' + this._esc(JSON.stringify(state.playerCards || [])) + ',' +
+            this._esc(JSON.stringify(state.communityCards || [])) + ',' +
+            this._esc(JSON.stringify(state.playerCards || [])) + ',' +
+            this._esc(JSON.stringify(state.players || [])) + ',' +
             this._esc(JSON.stringify(state.bets || {})) + ',' +
             (state.turn || 0) + ',' + this._esc(state.lastAction) + ',' +
             this._esc(JSON.stringify(state.commits || {})) + ',' + this._esc(JSON.stringify(state.reveals || {})) + ')';
@@ -407,9 +426,10 @@ var SQL = {
             for (var k in raw) { if (raw.hasOwnProperty(k)) row[k.toLowerCase()] = raw[k]; }
             row.communityCards = JSON.parse(row.communitycards || '[]');
             row.playerCards    = JSON.parse(row.playercards    || '[]');
+            row.players        = JSON.parse(row.players        || '[]');
             row.commits        = JSON.parse(row.commits        || '{}');
             row.reveals        = JSON.parse(row.reveals        || '{}');
-            var bets = JSON.parse(row.players || '{}');
+            var bets = JSON.parse(row.bets || '{}');
             row.bets = bets;
             row.currentBet = 0;
             for (var k2 in bets) { if (bets.hasOwnProperty(k2) && bets[k2] > row.currentBet) row.currentBet = bets[k2]; }
