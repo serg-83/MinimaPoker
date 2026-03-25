@@ -223,7 +223,15 @@ MDS.init(function(msg) {
     } else if (msg.event === 'MDSCOMMS') {
         // Handle messages sent from browser via MDS.comms.solo (enforcer self-messages)
         // Only handle game-logic types, not chat/lobby (browser handles those directly)
-        var allowedCommsTypes = { GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1, CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1, CHANNEL_UPDATE_PENDING: 1, CHANNEL_UPDATE_COMPLETE: 1, GAME_END_AUTO_CLOSE: 1, GAME_ENDED_RETURN_LOBBY: 1, FINISH_START_CHANNEL: 1 };
+        var allowedCommsTypes = {
+            GAME_START: 1, COMMIT: 1, REVEAL: 1, BET: 1, PLAYER_READY: 1, PLAYER_BUST: 1,
+            CLOSE_REQUEST_CONFIRM: 1, CLOSE_REQUEST_REJECT: 1,
+            CHANNEL_UPDATE_PENDING: 1, CHANNEL_UPDATE_COMPLETE: 1,
+            GAME_END_AUTO_CLOSE: 1, GAME_ENDED_RETURN_LOBBY: 1,
+            FINISH_START_CHANNEL: 1, REQUEST_NEW_CHANNEL: 1, REQUEST_ACCEPTED: 1, REQUEST_DENIED: 1,
+            CHANNEL_OPEN: 1, CREATE_CHANNEL: 1, SEND_FUNDS: 1, REPLY_SEND_FUNDS: 1,
+            SPEND_CHANNEL: 1, CHANNEL_CLOSE: 1, CLOSE_REQUEST: 1, CLOSE_ACCEPT: 1
+        };
         try {
             var commsData = msg.data && (msg.data.message || msg.data.data || msg.data);
             var commsMsg = typeof commsData === 'string' ? JSON.parse(commsData) : commsData;
