@@ -75,6 +75,153 @@ Player A                              Player B
 
 ---
 
+## Thunder in Poker: Under the Hood
+
+MinimaPoker is adapted from the [Thunder project](https://github.com/minima-global/Thunder) — Minima's eltoo-based payment channel implementation. Here's how Thunder channels work during a poker game:
+
+### 1. Channel Opening (Before Game)
+
+```
+Player A creates table → Player B joins
+↓
+Funding transaction created (400 Minima: 200+200)
+↓
+Initial trigger and settlement transactions created (sequence=0)
+↓
+Signatures exchanged via Maxima P2P
+↓
+Funding transaction posted on-chain
+↓
+Channel OPEN, game can start
+```
+
+### 2. Off-Chain Updates (During Game)
+
+**After every bet, call, raise, or fold:**
+
+1. **Enforcer** (player with lowest pubKey) calculates new balances from current stacks
+2. **Sequence increments** (0→1→2→3...)
+3. **Two new transactions created:**
+   - **Update TX**: spends eltoo output, creates new output with sequence+1
+   - **Settlement TX**: spends eltoo output, distributes funds by new balances
+
+4. **Enforcer sends via Maxima:**
+   ```javascript
+   SEND_FUNDS: {
+     channelId, sequence, balances,
+     updateTx: "hex...",
+     settlementTx: "hex...",
+     gameState: {...}
+   }
+   ```
+
+5. **Other player signs and replies:**
+   ```javascript
+   REPLY_SEND_FUNDS: {
+     settlementTx: "signed_hex...",
+     updateTx: "signed_hex...",
+     sequence: N
+   }
+   ```
+
+**Result:** Both players hold fully-signed update and settlement transactions with current balances, but **do NOT post them on-chain**.
+
+### 3. Example Game Flow
+
+```
+Start: A=200, B=200, sequence=0
+↓
+A bets 10 (big blind)
+→ sendChannelUpdate: A=190, B=200, sequence=1
+→ Signatures exchanged via SEND_FUNDS/REPLY_SEND_FUNDS
+↓
+B calls 10
+→ sendChannelUpdate: A=190, B=190, sequence=2
+→ Signatures exchanged
+↓
+A raises to 30
+→ sendChannelUpdate: A=170, B=190, sequence=3
+→ Signatures exchanged
+↓
+B folds
+→ sendChannelUpdate: A=210, B=190, sequence=4
+→ Signatures exchanged
+```
+
+**Key:** Each update creates a **new pair of transactions** (update + settlement) with increased sequence. Old transactions become invalid thanks to eltoo's `sequence GT prevsequence` check.
+
+### 4. Showdown and Channel Close
+
+```javascript
+// After showdown determines winner and distributes pot
+PokerGame.prototype.showdown = function() {
+    this.lastWinners = [...];
+    this.round = 'finished';
+
+    // Enforcer sends final channel update
+    if (isEnforcer) {
+        sendChannelUpdate(self, function(ok) {
+            // After 2 seconds, trigger auto-close
+            setTimeout(function() {
+                MDS.comms.solo({
+                    type: 'GAME_END_AUTO_CLOSE',
+                    channelId: self.channelId,
+                    finalStacks: {A: 210, B: 190}
+                });
+            }, 2000);
+        });
+    }
+}
+```
+
+**GAME_END_AUTO_CLOSE handler:**
+1. Updates channel balances with final stacks
+2. Cooperative close with `autoClose=true`
+3. One player creates and signs settlement
+4. Other player **automatically** signs and posts on-chain
+5. Settlement transaction mined → funds distributed
+6. Table deleted, players return to lobby
+
+### 5. Local Storage During Game
+
+**Each player stores in database:**
+
+```javascript
+{
+  channelId: "...",
+  sequence: 4,  // Current sequence (updates after each bet)
+
+  balances: {
+    playerA_pubKey: "210",
+    playerB_pubKey: "190"
+  },
+
+  // Fully-signed transactions (updated after each bet):
+  updateTx: "hex...",      // Update with sequence=4
+  settlementTx: "hex...",  // Settlement with sequence=4 and balances 210/190
+
+  // Initial transactions (unchanged):
+  fundingTx: "hex...",
+  triggerTx: "hex...",
+
+  status: "OPEN"
+}
+```
+
+### Key Features
+
+1. **Enforcer Pattern**: Player with lowest pubKey creates channel updates → prevents conflicts
+
+2. **Off-Chain Updates**: Every bet creates new transactions, but they're **not posted** on-chain until channel closes
+
+3. **Sequence Protection**: Eltoo script checks `sequence GT prevsequence` → newer transaction always replaces older
+
+4. **Automatic Close**: After showdown, channel closes automatically with `autoClose=true` → one player signs, other auto-posts
+
+5. **Cooperative Settlement**: Both players sign settlement → posted on-chain → funds distributed by final balances
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
