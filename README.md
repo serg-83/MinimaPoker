@@ -22,6 +22,8 @@ Cards are **never stored on-chain or in the database**. Each player commits a ra
 ### Peer-to-Peer Messaging
 Game state (actions, seeds, channel updates) is exchanged directly between players via **Maxima** — Minima's encrypted P2P messaging layer. No central server, no relay.
 
+The lobby includes a **global P2P chat** where players can communicate with all their Maxima contacts. Messages are sent directly peer-to-peer through the Maxima network — no central chat server required.
+
 ---
 
 ## Architecture
